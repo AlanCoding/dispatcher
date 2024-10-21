@@ -3,6 +3,8 @@ import logging
 import multiprocessing
 import os
 
+import janus
+
 from dispatcher.worker.task import work_loop
 
 logger = logging.getLogger(__name__)
@@ -11,9 +13,12 @@ logger = logging.getLogger(__name__)
 class PoolWorker:
     def __init__(self, worker_id, finished_queue):
         self.worker_id = worker_id
-        # TODO: rename message_queue to call_queue, because this is what cpython ProcessPoolExecutor calls them
-        self.message_queue = multiprocessing.Queue()
-        self.process = multiprocessing.Process(target=work_loop, args=(self.worker_id, self.message_queue, finished_queue))
+
+        # The queue takes an async form (here) and a synchronous form for the worker
+        shared_queue = janus.Queue()  # alternative to multiprocessing.Queue
+        self.process = multiprocessing.Process(target=work_loop, args=(self.worker_id, shared_queue.sync_q, finished_queue))
+        self.queue = shared_queue.async_q
+
         self.current_task = None
         self.finished_count = 0
         self.status = 'initialized'
@@ -24,7 +29,7 @@ class PoolWorker:
 
     async def stop(self):
         self.status = 'stopping'
-        self.message_queue.put("stop")
+        await self.queue.put("stop")
         if self.current_task:
             logger.warning(f'Worker {self.worker_id} is current running task (uuid={self.current_task["uuid"]}), canceling for shutdown')
             self.cancel()
@@ -44,7 +49,7 @@ class WorkerPool:
         self.num_workers = num_workers
         self.workers = {}
         self.next_worker_id = 0
-        self.finished_queue = multiprocessing.Queue()
+        self._finished_queue = None  # will create later at runtime
         self.queued_messages = []  # TODO: use deque, invent new kinds of message anxiety and panic
         self.read_results_task = None
         self.shutting_down = False
@@ -52,14 +57,23 @@ class WorkerPool:
         self.shutdown_timeout = 3
         # TODO: worker management lock
 
+    @property
+    def finished_queue(self):
+        "Implemented as a property because class is initialized in non-async code so we delay creation of the queue"
+        if not self._finished_queue:
+            self._shared_finished_queue = janus.Queue()
+            self._finished_queue = self._shared_finished_queue.async_q
+        return self._finished_queue
+
     async def start_working(self, dispatcher):
         self._spawn_workers()
         self.read_results_task = asyncio.create_task(self.read_results_forever())
         self.read_results_task.add_done_callback(dispatcher.fatal_error_callback)
 
     def _spawn_workers(self):
+        self.finished_queue
         for i in range(self.num_workers):
-            worker = PoolWorker(worker_id=self.next_worker_id, finished_queue=self.finished_queue)
+            worker = PoolWorker(worker_id=self.next_worker_id, finished_queue=self._shared_finished_queue.sync_q)
             worker.start()
             self.workers[self.next_worker_id] = worker
             self.next_worker_id += 1
@@ -115,9 +129,7 @@ class WorkerPool:
 
         # Put the message in the selected worker's queue, NOTE: this marks the worker as busy
         worker.current_task = message
-
-        # Go ahead and do the put synchronously, because it is just putting it on the queue
-        worker.message_queue.put(message)
+        await worker.queue.put(message)
 
     async def process_finished(self, worker, message):
         msg = f"Worker {worker.worker_id} finished task, ct={worker.finished_count}"
@@ -132,10 +144,8 @@ class WorkerPool:
 
     async def read_results_forever(self):
         """Perpetual task that continuously waits for task completions."""
-        loop = asyncio.get_event_loop()
         while True:
-            # Wait for a result from the finished queue
-            message = await loop.run_in_executor(None, self.finished_queue.get)
+            message = await self.finished_queue.get()
             worker_id = message["worker"]
             event = message["event"]
             worker = self.workers[worker_id]
