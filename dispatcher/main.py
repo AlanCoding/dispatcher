@@ -216,7 +216,7 @@ class DispatcherMain:
                         'args': [message['reply_to'], json.dumps(returned)],
                         'kwargs': {'config': broker.config, 'new_connection': True},
                         'uuid': f'control-{self.control_count}',
-                        'control': 'reply'  # for record keeping
+                        'control': 'reply',  # for record keeping
                     }
                 )
             else:

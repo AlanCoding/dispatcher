@@ -87,9 +87,7 @@ class Control(object):
         if data:
             send_data['control_data'] = data
 
-        await self.acontrol_with_reply_internal(
-            self.make_producer(reply_queue), send_data, expected_replies, timeout
-        )
+        await self.acontrol_with_reply_internal(self.make_producer(reply_queue), send_data, expected_replies, timeout)
 
         return self.parsed_replies
 

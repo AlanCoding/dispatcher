@@ -103,7 +103,7 @@ class WorkerPool:
         return SimpleNamespace(
             queue_cleared=asyncio.Event(),  # queue is now 0 length
             work_cleared=asyncio.Event(),  # Totally quiet, no blocked or queued messages, no busy workers
-            management_event=asyncio.Event()  # Process spawning is backgrounded, so this is the kicker
+            management_event=asyncio.Event(),  # Process spawning is backgrounded, so this is the kicker
         )
 
     async def start_working(self, dispatcher) -> None:
