@@ -48,4 +48,5 @@ jobs:
           show-progress: false
 
       - run: pip install mypy
+      - run: mypy --install-types
       - run: mypy --ignore-missing-imports dispatcher
