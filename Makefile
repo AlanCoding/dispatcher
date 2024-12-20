@@ -3,7 +3,7 @@ DOCKER_COMPOSE ?= docker compose
 
 # Mostly copied from DAB
 postgres:
-	docker start dispatch_postgres || $(DOCKER_COMPOSE) up -d msg_postgres --quiet-pull
+	docker start dispatch_postgres || $(DOCKER_COMPOSE) up -d msg_postgres --quiet-pull --wait
 
 ## Stops the postgres container started with 'make postgres'
 stop-postgres:
