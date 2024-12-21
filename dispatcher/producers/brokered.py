@@ -16,6 +16,7 @@ class BrokeredProducer(BaseProducer):
         self.config = config
         self.channels = channels
         self.connection = connection
+        self.old_connection = bool(connection)
 
     async def start_producing(self, dispatcher) -> None:
         await self.connect()
@@ -52,6 +53,7 @@ class BrokeredProducer(BaseProducer):
                 if not hasattr(self.production_task, '_dispatcher_tb_logged'):
                     logger.exception(f'Broker {self.broker} shutdown saw an unexpected exception from production task')
             self.production_task = None
-        if self.connection:
-            await self.connection.close()
-            self.connection = None
+        if not self.old_connection:
+            if self.connection:
+                await self.connection.close()
+                self.connection = None
