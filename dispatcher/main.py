@@ -241,6 +241,18 @@ class DispatcherMain:
                     logger.exception(f'Producer {producer} failed to start')
                     self.events.exit_event.set()
 
+    async def cancel_tasks(self):
+        for task in asyncio.all_tasks():
+            if task == asyncio.current_task():
+                continue
+            if not task.done():
+                logger.warning(f'Task {task} did not shut down in shutdown method')
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
     async def main(self) -> None:
         logger.info('Connecting dispatcher signal handling')
         await self.connect_signals()
@@ -252,15 +264,6 @@ class DispatcherMain:
 
         await self.shutdown()
 
-        for task in asyncio.all_tasks():
-            if task == asyncio.current_task():
-                continue
-            if not task.done():
-                logger.warning(f'Task {task} did not shut down in shutdown method')
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        await self.cancel_tasks()
 
         logger.debug('Dispatcher loop fully completed')

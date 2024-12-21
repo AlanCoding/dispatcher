@@ -3,81 +3,56 @@ import json
 
 import pytest
 
-from dispatcher.control import Control
-
-
-@pytest.mark.asyncio
-async def test_run_and_then_shutdown(pg_dispatcher):
-    await pg_dispatcher.start_working()
-    await pg_dispatcher.wait_for_producers_ready()
-
-    await pg_dispatcher.shutdown()
-
-    assert pg_dispatcher.pool.finished_count == 0
-
-
-@pytest.mark.asyncio
-async def test_run_lambda_function(pg_dispatcher, pg_message):
-    await pg_dispatcher.start_working()
-    await pg_dispatcher.wait_for_producers_ready()
-
-    clearing_task = asyncio.create_task(pg_dispatcher.pool.events.work_cleared.wait())
-    pg_message('lambda: "This worked!"')
-    await clearing_task
-
-    await pg_dispatcher.shutdown()
-    assert pg_dispatcher.pool.finished_count == 1
-
-
 SLEEP_METHOD = 'lambda: __import__("time").sleep(0.1)'
 
 
 @pytest.mark.asyncio
-async def test_multiple_channels(pg_dispatcher, pg_message):
-    await pg_dispatcher.start_working()
-    await pg_dispatcher.wait_for_producers_ready()
+async def test_run_lambda_function(apg_dispatcher, pg_message):
+    assert apg_dispatcher.pool.finished_count == 0
 
-    clearing_task = asyncio.create_task(pg_dispatcher.pool.events.work_cleared.wait())
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
+    pg_message('lambda: "This worked!"')
+    await clearing_task
+
+    assert apg_dispatcher.pool.finished_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multiple_channels(apg_dispatcher, pg_message):
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
     pg_message(SLEEP_METHOD, channel='test_channel')
     pg_message(SLEEP_METHOD, channel='test_channel2')
     pg_message(SLEEP_METHOD, channel='test_channel3')
     pg_message(SLEEP_METHOD, channel='test_channel4')  # not listening to this
     await clearing_task
 
-    await pg_dispatcher.shutdown()
-    assert pg_dispatcher.pool.finished_count == 3
+    assert apg_dispatcher.pool.finished_count == 3
 
 
 @pytest.mark.asyncio
-async def test_ten_messages_queued(pg_dispatcher, pg_message):
-    await pg_dispatcher.start_working()
-    await pg_dispatcher.wait_for_producers_ready()
-
-    clearing_task = asyncio.create_task(pg_dispatcher.pool.events.work_cleared.wait())
+async def test_ten_messages_queued(apg_dispatcher, pg_message):
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
     for i in range(15):
         pg_message(SLEEP_METHOD)
     await clearing_task
 
-    await pg_dispatcher.shutdown()
-    assert pg_dispatcher.pool.finished_count == 15
+    assert apg_dispatcher.pool.finished_count == 15
 
 
 @pytest.mark.asyncio
-async def test_cancel_task(pg_dispatcher, pg_message, pg_control):
-    await pg_dispatcher.start_working()
-    await pg_dispatcher.wait_for_producers_ready()
-
+async def test_cancel_task(apg_dispatcher, pg_message, pg_control):
     msg = json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar'})
     pg_message(msg)
 
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
     canceled_jobs = await pg_control.acontrol_with_reply('cancel', data={'uuid': 'foobar'})
-    print(canceled_jobs)
     worker_id, canceled_message = canceled_jobs[0][0]
+    await clearing_task
 
     assert canceled_message['uuid'] == 'foobar'
 
-    await pg_dispatcher.shutdown()
-    assert [pg_dispatcher.pool.finished_count, pg_dispatcher.pool.canceled_count, pg_dispatcher.pool.control_count] == [0, 1, 1]
+    pool = apg_dispatcher.pool
+    assert [pool.finished_count, pool.canceled_count, pool.control_count] == [0, 1, 1]
 
     # print('')
     # print('finding a running task by its task name')
