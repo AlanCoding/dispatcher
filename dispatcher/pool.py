@@ -89,9 +89,9 @@ class WorkerPool:
         self.read_results_task: Optional[Task] = None
         self.start_worker_task: Optional[Task] = None
         self.shutting_down = False
-        self.finished_count = 0
-        self.control_count = 0
-        self.canceled_count = 0
+        self.finished_count: int = 0
+        self.control_count: int = 0
+        self.canceled_count: int = 0
         self.shutdown_timeout = 3
         self.management_lock = asyncio.Lock()
         self.fd_lock = fd_lock or asyncio.Lock()

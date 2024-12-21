@@ -9,7 +9,7 @@ import pytest_asyncio
 from dispatcher.main import DispatcherMain
 from dispatcher.control import Control
 
-from dispatcher.brokers.pg_notify import publish_message
+from dispatcher.brokers.pg_notify import apublish_message, aget_connection
 
 
 # List of channels to listen on
@@ -41,13 +41,24 @@ async def apg_dispatcher(request) -> AsyncIterator[DispatcherMain]:
         await dispatcher.cancel_tasks()
 
 
-@pytest.fixture
-def pg_message() -> Callable:
-    def _rf(message, channel='test_channel'):
-        publish_message(channel, message, config={"conninfo": CONNECTION_STRING})
+@pytest_asyncio.fixture()
+async def pg_message(psycopg_conn) -> Callable:
+    async def _rf(message, channel='test_channel'):
+        await apublish_message(psycopg_conn, channel, message)
     return _rf
 
 
 @pytest.fixture
-def pg_control() -> Control:
-    return Control('test_channel', config={'conninfo': CONNECTION_STRING})
+def pg_control(psycopg_conn) -> Control:
+    return Control('test_channel', async_connection=psycopg_conn)
+
+
+@pytest_asyncio.fixture()
+async def psycopg_conn():
+    conn = None
+    try:
+        conn = await aget_connection({'conninfo': CONNECTION_STRING})
+        yield conn
+    finally:
+        if conn:
+            conn.close()

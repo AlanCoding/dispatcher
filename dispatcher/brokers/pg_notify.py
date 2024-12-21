@@ -75,9 +75,12 @@ def get_django_connection():
             return None
 
 
-def publish_message(queue, message, config=None, new_connection=False):
+def publish_message(queue, message, config=None, connection=None, new_connection=False):
     conn = None
-    if not new_connection:
+    if connection:
+        conn = connection
+
+    if (not conn) and (not new_connection):
         conn = get_django_connection()
 
     created_new_conn = False

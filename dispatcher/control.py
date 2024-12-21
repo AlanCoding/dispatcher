@@ -11,9 +11,10 @@ logger = logging.getLogger('awx.main.dispatch')
 
 
 class Control(object):
-    def __init__(self, queue, config=None):
+    def __init__(self, queue, config=None, async_connection=None):
         self.queuename = queue
         self.config = config
+        self.async_connection = async_connection
         self.received_replies = []
         self.expected_replies = None
         self.shutting_down = False
@@ -62,6 +63,7 @@ class Control(object):
         self.expected_replies = expected_replies
         self.events.exit_event = asyncio.Event()
         await producer.start_producing(self)
+        await producer.events.ready_event.wait()
 
         payload = json.dumps(send_data)
         await producer.notify(self.queuename, payload)
@@ -75,7 +77,11 @@ class Control(object):
         await producer.shutdown()
 
     def make_producer(self, reply_queue):
-        return BrokeredProducer(broker='pg_notify', config=self.config, channels=[reply_queue])
+        if self.async_connection:
+            conn_kwargs = {'connection': self.async_connection}
+        else:
+            conn_kwargs = {'config': self.config}
+        return BrokeredProducer(broker='pg_notify', channels=[reply_queue], **conn_kwargs)
 
     @property
     def parsed_replies(self):
@@ -96,7 +102,7 @@ class Control(object):
         start = time.time()
         reply_queue = Control.generate_reply_queue_name()
 
-        if not self.config:
+        if (not self.config) and (not self.async_connection):
             raise RuntimeError('Must use a new psycopg connection to do control-and-reply')
 
         send_data = {'control': command, 'reply_to': reply_queue}

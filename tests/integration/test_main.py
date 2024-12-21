@@ -40,6 +40,19 @@ async def test_ten_messages_queued(apg_dispatcher, pg_message):
 
 
 @pytest.mark.asyncio
+async def test_get_running_jobs(apg_dispatcher, pg_message, pg_control):
+    msg = json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'find_me'})
+    pg_message(msg)
+
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
+    running_jobs = await pg_control.acontrol_with_reply('running')
+    worker_id, running_job = running_jobs[0][0]
+    await clearing_task
+
+    assert running_job['uuid'] == 'find_me'
+
+
+@pytest.mark.asyncio
 async def test_cancel_task(apg_dispatcher, pg_message, pg_control):
     msg = json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar'})
     pg_message(msg)
@@ -54,18 +67,30 @@ async def test_cancel_task(apg_dispatcher, pg_message, pg_control):
     pool = apg_dispatcher.pool
     assert [pool.finished_count, pool.canceled_count, pool.control_count] == [0, 1, 1]
 
-    # print('')
-    # print('finding a running task by its task name')
-    # publish_message(channel, json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar2'}), config={'conninfo': CONNECTION_STRING})
-    # running_data = ctl.control_with_reply('running', data={'task': 'lambda: __import__("time").sleep(3.1415)'})
-    # print(json.dumps(running_data, indent=2))
 
-    # print('writing a message with a delay')
-    # print('     4 second delay task')
-    # publish_message(channel, json.dumps({'task': 'lambda: 123421', 'uuid': 'foobar2', 'delay': 4}), config={'conninfo': CONNECTION_STRING})
-    # print('     30 second delay task')
-    # publish_message(channel, json.dumps({'task': 'lambda: 987987234', 'uuid': 'foobar2', 'delay': 30}), config={'conninfo': CONNECTION_STRING})
-    # print('     10 second delay task')
+@pytest.mark.asyncio
+async def test_message_with_delay(apg_dispatcher, pg_message, pg_control):
+    assert apg_dispatcher.pool.finished_count == 0
+
+    # Send message to run task with a delay
+    msg = json.dumps({'task': 'lambda: print("This task had a delay")', 'uuid': 'delay_task', 'delay': 0.2})
+    await pg_message(msg)
+
+    # Make assertions while task is in the delaying phase
+    await asyncio.sleep(0.04)
+    running_jobs = await pg_control.acontrol_with_reply('running')
+    worker_id, running_job = running_jobs[0][0]
+    assert worker_id == '<delayed>'
+    assert running_job['uuid'] == 'delay_task'
+    # Completing the reply itself will be a work_cleared event, so we have to clear the event
+    apg_dispatcher.pool.events.work_cleared.clear()
+
+    # Wait for task to finish, assertions after completion
+    await apg_dispatcher.pool.events.work_cleared.wait()
+    pool = apg_dispatcher.pool
+    assert [pool.finished_count, pool.canceled_count, pool.control_count] == [1, 0, 1]
+
+
     # # NOTE: this task will error unless you run the dispatcher itself with it in the PYTHONPATH, which is intended
     # sleep_function.apply_async(
     #     args=[3],  # sleep 3 seconds

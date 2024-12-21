@@ -9,13 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 class BrokeredProducer(BaseProducer):
-    def __init__(self, broker: str = 'pg_notify', config: Optional[dict] = None, channels: tuple = ()) -> None:
+    def __init__(self, broker: str = 'pg_notify', config: Optional[dict] = None, channels: tuple = (), connection=None) -> None:
         self.events = self._create_events()
         self.production_task: Optional[asyncio.Task] = None
         self.broker = broker
         self.config = config
         self.channels = channels
-        self.connection = None
+        self.connection = connection
 
     async def start_producing(self, dispatcher) -> None:
         await self.connect()
@@ -30,7 +30,8 @@ class BrokeredProducer(BaseProducer):
         return []
 
     async def connect(self):
-        self.connection = await aget_connection(self.config)
+        if self.connection is None:
+            self.connection = await aget_connection(self.config)
 
     async def produce_forever(self, dispatcher) -> None:
         async for channel, payload in aprocess_notify(self.connection, self.channels, connected_event=self.events.ready_event):
