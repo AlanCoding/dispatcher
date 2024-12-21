@@ -18,4 +18,5 @@ clean:
 linters:
 	black dispatcher/
 	isort dispatcher/
+	flake8 dispatcher/
 	mypy --ignore-missing-imports dispatcher
