@@ -14,7 +14,7 @@ jobs:
 
       - name: Install dispatcher
         run: pip install -e .[pg_notify]
-      - run: pip install pytest
+      - run: pip install pytest pytest-asyncio
       - run: pytest tests/unit tests/integration
 
   black:
@@ -49,7 +49,7 @@ jobs:
 
       - run: pip install mypy
       - run: pip install -e .[pg_notify]
-      - run: mypy --install-types
+      - run: python3 -m pip install types-PyYAML
       - run: mypy --ignore-missing-imports dispatcher
 
   flake8:
