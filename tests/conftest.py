@@ -61,4 +61,4 @@ async def psycopg_conn():
         yield conn
     finally:
         if conn:
-            conn.close()
+            await conn.close()
