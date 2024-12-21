@@ -15,7 +15,7 @@ jobs:
       - name: Install dispatcher
         run: pip install -e .[pg_notify]
       - run: pip install pytest pytest-asyncio
-      - run: pytest tests/unit tests/integration -vv
+      - run: pytest tests/unit tests/integration -vv -s
 
   black:
     name: Run black
