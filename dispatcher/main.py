@@ -3,12 +3,11 @@ import json
 import logging
 import signal
 from types import SimpleNamespace
-from typing import Optional, Union
+from typing import Iterable, Optional
 
+from dispatcher import producers as producer_module
+from dispatcher.config import settings
 from dispatcher.pool import WorkerPool
-from dispatcher.producers.base import BaseProducer
-from dispatcher.producers.brokered import BrokeredProducer
-from dispatcher.producers.scheduled import ScheduledProducer
 from dispatcher.utils import MODULE_METHOD_DELIMITER
 
 logger = logging.getLogger(__name__)
@@ -79,7 +78,7 @@ class DispatcherEvents:
 
 
 class DispatcherMain:
-    def __init__(self, config: dict):
+    def __init__(self, service_config: dict, producers: Iterable[producer_module.BaseProducer]):
         self.delayed_messages: list[SimpleNamespace] = []
         self.received_count = 0
         self.control_count = 0
@@ -88,23 +87,34 @@ class DispatcherMain:
         # Lock for file descriptor mgmnt - hold lock when forking or connecting, to avoid DNS hangs
         # psycopg is well-behaved IFF you do not connect while forking, compare to AWX __clean_on_fork__
         self.fd_lock = asyncio.Lock()
-        self.pool = WorkerPool(config.get('pool', {}).get('max_workers', 3), self.fd_lock)
+        self.pool = WorkerPool(fd_lock=self.fd_lock, **service_config)
 
-        # Initialize all the producers, this should not start anything, just establishes objects
-        self.producers: list[Union[ScheduledProducer, BrokeredProducer]] = []
-        if 'producers' in config:
-            producer_config = config['producers']
-            if 'brokers' in producer_config:
-                for broker_name, broker_config in producer_config['brokers'].items():
-                    # TODO: import from the broker module here, some importlib stuff
-                    # TODO: make channels specific to broker, probably
-                    if broker_name != 'pg_notify':
-                        continue
-                    self.producers.append(BrokeredProducer(broker=broker_name, config=broker_config, channels=producer_config['brokers']['channels']))
-            if 'scheduled' in producer_config:
-                self.producers.append(ScheduledProducer(producer_config['scheduled']))
+        # Set all the producers, this should still not start anything, just establishes objects
+        self.producers = producers
 
         self.events: DispatcherEvents = DispatcherEvents()
+
+    @classmethod
+    def from_config(cls) -> 'DispatcherMain':
+        producers = DispatcherMain.get_producers()
+        return cls(settings.service, producers)
+
+    @classmethod
+    def get_producers(cls) -> Iterable[producer_module.BaseProducer]:
+        producers = []
+        for broker_name, broker_kwargs in settings.brokers.items():
+            broker = producer_module.BrokeredProducer.get_async_broker(broker_name, broker_kwargs)
+            producer = producer_module.BrokeredProducer(broker=broker)
+            producers.append(producer)
+
+        for producer_cls, producer_kwargs in settings.producers.items():
+            producers.append(getattr(producer_module, producer_cls)(**producer_kwargs))
+
+        return producers
+
+    def _create_events(self):
+        "Benchmark tests have to re-create this because they use same object in different event loops"
+        return SimpleNamespace(exit_event=asyncio.Event())
 
     def fatal_error_callback(self, *args) -> None:
         """Method to connect to error callbacks of other tasks, will kick out of main loop"""
@@ -127,7 +137,8 @@ class DispatcherMain:
     async def wait_for_producers_ready(self) -> None:
         "Returns when all the producers have hit their ready event"
         for producer in self.producers:
-            await producer.events.ready_event.wait()
+            if producer.events:
+                await producer.events.ready_event.wait()
 
     async def connect_signals(self) -> None:
         loop = asyncio.get_event_loop()
@@ -163,7 +174,7 @@ class DispatcherMain:
         logger.debug('Setting event to exit main loop')
         self.events.exit_event.set()
 
-    async def connected_callback(self, producer: BaseProducer) -> None:
+    async def connected_callback(self, producer: producer_module.BaseProducer) -> None:
         return
 
     async def sleep_then_process(self, capsule: SimpleNamespace) -> None:
@@ -183,7 +194,7 @@ class DispatcherMain:
         capsule.task = new_task
         self.delayed_messages.append(capsule)
 
-    async def process_message(self, payload: dict, broker: Optional[BrokeredProducer] = None, channel: Optional[str] = None) -> None:
+    async def process_message(self, payload: dict, broker: Optional[producer_module.BrokeredProducer] = None, channel: Optional[str] = None) -> None:
         # Convert payload from client into python dict
         # TODO: more structured validation of the incoming payload from publishers
         if isinstance(payload, str):

@@ -1,6 +1,10 @@
 import logging
+from typing import Any, Iterable, Optional
 
 import psycopg
+
+from dispatcher.brokers.base import BaseBroker
+from dispatcher.utils import resolve_callable
 
 logger = logging.getLogger(__name__)
 
@@ -13,87 +17,160 @@ Thus, all psycopg-lib-specific actions must happen here.
 """
 
 
-# TODO: get database data from settings
-# # As Django settings, may not use
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.postgresql",
-#         "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-#         "PORT": os.getenv("DB_PORT", 55777),
-#         "USER": os.getenv("DB_USER", "dispatch"),
-#         "PASSWORD": os.getenv("DB_PASSWORD", "dispatching"),
-#         "NAME": os.getenv("DB_NAME", "dispatch_db"),
-#     }
-# }
+class PGNotifyBase(BaseBroker):
+
+    def __init__(
+        self,
+        channels: Iterable[str] = ('dispatcher_default',),
+        default_publish_channel: str = 'dispatcher_default',
+    ) -> None:
+        self.channels = channels
+        self.default_publish_channel = default_publish_channel
 
 
-async def aget_connection(config):
-    return await psycopg.AsyncConnection.connect(**config, autocommit=True)
+class AsyncBroker(PGNotifyBase):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        async_connection_factory: Optional[str] = None,
+        sync_connection_factory: Optional[str] = None,  # noqa
+        connection: Optional[psycopg.AsyncConnection] = None,
+        **kwargs,
+    ) -> None:
+        if not (config or async_connection_factory or connection):
+            raise RuntimeError('Must specify either config or async_connection_factory')
 
-
-def get_connection(config):
-    return psycopg.Connection.connect(**config, autocommit=True)
-
-
-async def aprocess_notify(connection, channels, connected_callback=None):
-    async with connection.cursor() as cur:
-        for channel in channels:
-            await cur.execute(f"LISTEN {channel};")
-            logger.info(f"Set up pg_notify listening on channel '{channel}'")
-
-        if connected_callback:
-            await connected_callback()
-
-        while True:
-            logger.debug('Starting listening for pg_notify notifications')
-            async for notify in connection.notifies():
-                yield notify.channel, notify.payload
-
-
-async def apublish_message(connection, channel, payload=None):
-    async with connection.cursor() as cur:
-        if not payload:
-            await cur.execute(f'NOTIFY {channel};')
+        if config:
+            self._config: Optional[dict] = config.copy()
+            self._config['autocommit'] = True
         else:
-            await cur.execute(f"NOTIFY {channel}, '{payload}';")
+            self._config = None
+
+        self._async_connection_factory = async_connection_factory
+        self._connection: Optional[Any] = connection
+
+        super().__init__(**kwargs)
+
+    async def get_connection(self) -> psycopg.AsyncConnection:
+        if not self._connection:
+            if self._async_connection_factory:
+                factory = resolve_callable(self._async_connection_factory)
+                if not factory:
+                    raise RuntimeError(f'Could not import connection factory {self._async_connection_factory}')
+                if self._config:
+                    self._connection = await factory(**self._config)
+                else:
+                    self._connection = await factory()
+            elif self._config:
+                self._connection = await AsyncBroker.create_connection(self._config)
+            else:
+                raise RuntimeError('Could not construct async connection for lack of config or factory')
+        return self._connection
+
+    @staticmethod
+    async def create_connection(config) -> psycopg.AsyncConnection:
+        return await psycopg.AsyncConnection.connect(**config)
+
+    async def aprocess_notify(self, connected_callback=None):
+        connection = await self.get_connection()
+        async with connection.cursor() as cur:
+            for channel in self.channels:
+                await cur.execute(f"LISTEN {channel};")
+                logger.info(f"Set up pg_notify listening on channel '{channel}'")
+
+            if connected_callback:
+                await connected_callback()
+
+            while True:
+                logger.debug('Starting listening for pg_notify notifications')
+                async for notify in connection.notifies():
+                    yield notify.channel, notify.payload
+
+    async def apublish_message(self, channel: Optional[str] = None, payload=None) -> None:
+        connection = await self.get_connection()
+        if not channel:
+            channel = self.default_publish_channel
+        async with connection.cursor() as cur:
+            if not payload:
+                await cur.execute(f'NOTIFY {channel};')
+            else:
+                await cur.execute(f"NOTIFY {channel}, '{payload}';")
+
+    async def aclose(self) -> None:
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
 
 
-def get_django_connection():
-    try:
-        from django.conf import ImproperlyConfigured
-        from django.db import connection as pg_connection
-    except ImportError:
-        return None
-    else:
-        try:
-            if pg_connection.connection is None:
-                pg_connection.connect()
-            if pg_connection.connection is None:
-                raise RuntimeError('Unexpectedly could not connect to postgres for pg_notify actions')
-            return pg_connection.connection
-        except ImproperlyConfigured:
-            return None
+connection_save = object()
 
 
-def publish_message(queue, message, config=None, connection=None, new_connection=False):
-    conn = None
-    if connection:
-        conn = connection
+def connection_saver(**config):
+    """
+    This mimics the behavior of Django for tests and demos
+    Philosophically, this is used by an application that uses an ORM,
+    or otherwise has its own connection management logic.
+    Dispatcher does not manage connections, so this a simulation of that.
+    """
+    if not hasattr(connection_save, '_connection'):
+        config['autocommit'] = True
+        connection_save._connection = SyncBroker.connect(**config)
+    return connection_save._connection
 
-    if (not conn) and (not new_connection):
-        conn = get_django_connection()
 
-    created_new_conn = False
-    if not conn:
-        if config is None:
-            raise RuntimeError('Could not use Django connection, and no postgres config supplied')
-        conn = get_connection(config)
-        created_new_conn = True
+class SyncBroker(PGNotifyBase):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        async_connection_factory: Optional[str] = None,  # noqa
+        sync_connection_factory: Optional[str] = None,
+        connection: Optional[psycopg.Connection] = None,
+        **kwargs,
+    ) -> None:
+        if not (config or sync_connection_factory or connection):
+            raise RuntimeError('Must specify either config or async_connection_factory')
 
-    with conn.cursor() as cur:
-        cur.execute('SELECT pg_notify(%s, %s);', (queue, message))
+        if config:
+            self._config: Optional[dict] = config.copy()
+            self._config['autocommit'] = True
+        else:
+            self._config = None
 
-    logger.debug(f'Sent pg_notify message to {queue}')
+        self._sync_connection_factory = sync_connection_factory
+        self._connection: Optional[Any] = connection
+        super().__init__(**kwargs)
 
-    if created_new_conn:
-        conn.close()
+    def get_connection(self) -> psycopg.Connection:
+        if not self._connection:
+            if self._sync_connection_factory:
+                factory = resolve_callable(self._sync_connection_factory)
+                if not factory:
+                    raise RuntimeError(f'Could not import connection factory {self._sync_connection_factory}')
+                if self._config:
+                    self._connection = factory(**self._config)
+                else:
+                    self._connection = factory()
+            elif self._config:
+                self._connection = SyncBroker.create_connection(self._config)
+            else:
+                raise RuntimeError('Cound not construct synchronous connection for lack of config or factory')
+        return self._connection
+
+    @staticmethod
+    def create_connection(config) -> psycopg.Connection:
+        return psycopg.Connection.connect(**config)
+
+    def publish_message(self, channel: Optional[str], message: dict) -> None:
+        connection = self.get_connection()
+        if not channel:
+            channel = self.default_publish_channel
+
+        with connection.cursor() as cur:
+            cur.execute('SELECT pg_notify(%s, %s);', (channel, message))
+
+        logger.debug(f'Sent pg_notify message to {channel}')
+
+    def close(self) -> None:
+        if self._connection:
+            self._connection.close()
+            self._connection = None

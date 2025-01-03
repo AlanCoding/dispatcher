@@ -6,6 +6,7 @@ import time
 from typing import Callable, Optional, Set, Tuple
 from uuid import uuid4
 
+from dispatcher.producers.brokered import BrokeredProducer
 from dispatcher.utils import MODULE_METHOD_DELIMITER, DispatcherCallable, resolve_callable
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ class DispatcherMethod:
 
         return body
 
-    def apply_async(self, args=None, kwargs=None, queue=None, uuid=None, connection=None, config=None, **kw) -> Tuple[dict, str]:
+    def apply_async(self, args=None, kwargs=None, queue=None, uuid=None, **kw) -> Tuple[dict, str]:
         queue = queue or self.submission_defaults.get('queue')
         if not queue:
             msg = f'{self.fn}: Queue value required and may not be None'
@@ -91,11 +92,16 @@ class DispatcherMethod:
 
         obj = self.get_async_body(args=args, kwargs=kwargs, uuid=uuid, **kw)
 
+        from dispatcher.conf import settings
+
+        for broker_name, broker_kwargs in settings.brokers.items():
+            broker = BrokeredProducer.get_sync_broker(broker_name, broker_kwargs)
+            break
+
         # TODO: before sending, consult an app-specific callback if configured
-        from dispatcher.brokers.pg_notify import publish_message
 
         # NOTE: the kw will communicate things in the database connection data
-        publish_message(queue, json.dumps(obj), connection=connection, config=config)
+        broker.publish_message(queue, json.dumps(obj))
         return (obj, queue)
 
 

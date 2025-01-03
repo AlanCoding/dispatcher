@@ -7,4 +7,7 @@ class ProducerEvents:
 
 
 class BaseProducer:
-    pass
+
+    async def start_producing(self, dispatcher) -> None: ...
+
+    async def shutdown(self): ...

@@ -19,7 +19,8 @@ class ScheduledProducer(BaseProducer):
             schedule_task = asyncio.create_task(self.run_schedule_forever(task_name, per_seconds, dispatcher))
             self.scheduled_tasks.append(schedule_task)
             schedule_task.add_done_callback(dispatcher.fatal_error_callback)
-        self.events.ready_event.set()
+        if self.events:
+            self.events.ready_event.set()
 
     def all_tasks(self) -> list[asyncio.Task]:
         return self.scheduled_tasks
