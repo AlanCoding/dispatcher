@@ -5,9 +5,9 @@ import signal
 from types import SimpleNamespace
 from typing import Optional, Union
 
-from dispatcher.pool import WorkerPool
 from dispatcher import producers as producer_module
 from dispatcher.utils import MODULE_METHOD_DELIMITER
+from dispatcher.pool import WorkerPool
 
 logger = logging.getLogger(__name__)
 
