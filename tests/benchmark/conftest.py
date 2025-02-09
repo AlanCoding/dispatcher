@@ -45,14 +45,14 @@ class PoolServer:
             else:
                 times = int(message.strip())
                 print('creating cleared event task')
-                cleared_event = asyncio.create_task(pool.events.queue_cleared.wait())
+                cleared_event = asyncio.create_task(pool.events.work_cleared.wait())
                 print('creating tasks for submissions')
                 submissions = [pool.dispatch_task({'task': function, 'uuid': str(i)}) for i in range(times)]
                 print('awaiting submission task')
                 await asyncio.gather(*submissions)
                 print('waiting for cleared event')
                 await cleared_event
-                pool.events.queue_cleared.clear()
+                pool.events.work_cleared.clear()
                 await loop.run_in_executor(None, queue_out.put, 'done')
         print('exited forever loop of pool server')
 
