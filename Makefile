@@ -22,4 +22,4 @@ linters:
 	mypy --ignore-missing-imports dispatcher
 
 benchmark:
-	py.test tests/benchmark/ --benchmark-columns=mean,min,max,stddev,rounds
+	py.test tests/benchmark/ --benchmark-columns=mean,min,max,stddev,rounds --benchmark-json=benchmark_data.json
