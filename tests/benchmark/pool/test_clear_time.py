@@ -11,6 +11,13 @@ def test_clear_sleep_by_task_number(benchmark, times, with_pool_server):
         benchmark(pool_server.run_benchmark_test, pool_server.queue_in, pool_server.queue_out, times)
 
 
+@pytest.mark.benchmark(group="by_task")
+@pytest.mark.parametrize('times', [1, 10, 100, 1000])
+def test_clear_no_op_by_task_number(benchmark, times, with_pool_server):
+    with with_pool_server(4, function='lambda: None') as pool_server:
+        benchmark(pool_server.run_benchmark_test, pool_server.queue_in, pool_server.queue_out, times)
+
+
 @pytest.mark.benchmark(group="by_worker_sleep")
 @pytest.mark.parametrize('workers', [1, 4, 12, 24, 50, 75])
 def test_clear_sleep_by_worker_count(benchmark, workers, with_pool_server):
