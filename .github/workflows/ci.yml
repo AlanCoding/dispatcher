@@ -95,5 +95,5 @@ jobs:
       - name: Install dispatcher
         run: pip install -e .[pg_notify]
       - run: make postgres
-      - run: pip install pytest pytest-benchmark
+      - run: pip install pytest pytest-benchmark pytest-asyncio
       - run: make benchmark
