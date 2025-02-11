@@ -3,11 +3,12 @@ import json
 import logging
 import signal
 from types import SimpleNamespace
-from typing import Optional, Union
+from typing import Iterable, Optional
 
 from dispatcher import producers as producer_module
-from dispatcher.utils import MODULE_METHOD_DELIMITER
+from dispatcher.config import settings
 from dispatcher.pool import WorkerPool
+from dispatcher.utils import MODULE_METHOD_DELIMITER
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class ControlTasks:
 
 
 class DispatcherMain:
-    def __init__(self, config: dict):
+    def __init__(self, service_config: dict, producers: Iterable[producer_module.BaseProducer]):
         self.delayed_messages: list[SimpleNamespace] = []
         self.received_count = 0
         self.control_count = 0
@@ -79,17 +80,30 @@ class DispatcherMain:
         # Lock for file descriptor mgmnt - hold lock when forking or connecting, to avoid DNS hangs
         # psycopg is well-behaved IFF you do not connect while forking, compare to AWX __clean_on_fork__
         self.fd_lock = asyncio.Lock()
-        self.pool = WorkerPool(config.get('pool', {}).get('max_workers', 3), self.fd_lock)
+        self.pool = WorkerPool(fd_lock=self.fd_lock, **service_config)
 
-        # Initialize all the producers, this should not start anything, just establishes objects
-        self.producers: list[Union[producer_module.ScheduledProducer, producer_module.BrokeredProducer]] = []
-        if 'producers' in config:
-            all_producer_config = config['producers']
-            for cls_name, producer_config in all_producer_config.items():
-                producer_cls = getattr(producer_module, cls_name)
-                self.producers.append(producer_cls(**producer_config))
+        # Set all the producers, this should still not start anything, just establishes objects
+        self.producers = producers
 
         self.events = self._create_events()
+
+    @classmethod
+    def from_config(cls) -> 'DispatcherMain':
+        producers = DispatcherMain.get_producers()
+        return cls(settings.service, producers)
+
+    @classmethod
+    def get_producers(cls) -> list[producer_module.BaseProducer]:
+        producers = []
+        for broker_name, broker_kwargs in settings.brokers:
+            broker = producer_module.BrokeredProducer.get_async_broker(broker_name, broker_kwargs)
+            producer = producer_module.BrokeredProducer(broker=broker)
+            producers.append(producer)
+
+        for producer_cls, producer_kwargs in settings.producers:
+            producers.append(getattr(producer_module, producer_cls)(**producer_kwargs))
+
+        return producers
 
     def _create_events(self):
         "Benchmark tests have to re-create this because they use same object in different event loops"

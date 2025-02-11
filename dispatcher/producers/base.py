@@ -1,7 +1,18 @@
 import asyncio
-from types import SimpleNamespace
+from typing import Optional
+
+
+class ProducerEvents:
+    def __init__(self) -> None:
+        self.ready_event = asyncio.Event()
 
 
 class BaseProducer:
-    def _create_events(self):
-        return SimpleNamespace(ready_event=asyncio.Event())
+    events: Optional[ProducerEvents] = None
+
+    def _create_events(self) -> ProducerEvents:
+        return ProducerEvents()
+
+    async def start_producing(self, dispatcher) -> None: ...
+
+    async def shutdown(self): ...
