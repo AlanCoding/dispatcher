@@ -1,3 +1,16 @@
-# this is a good place to create config files, load them, and test that we get the params we expected
-# also a good place to take some configs and test initializing dispatcher objects with them
-# None of this has been done, but you could do it
+import pytest
+
+from dispatcher.config import DispatcherSettings, LazySettings
+
+
+def test_settings_reference_unconfigured():
+    settings = LazySettings()
+    with pytest.raises(Exception) as exc:
+        settings.brokers
+    assert 'Dispatcher not configured' in str(exc)
+
+
+def test_configured_settings():
+    settings = LazySettings()
+    settings._wrapped = DispatcherSettings({'brokers': {'pg_notify': {'config': {}}}})
+    'pg_notify' in settings.brokers
