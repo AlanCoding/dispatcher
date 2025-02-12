@@ -1,12 +1,9 @@
 import argparse
-import asyncio
 import logging
 import os
 import sys
 
-import yaml
-
-from dispatcher.main import DispatcherMain
+from dispatcher import run_service
 from dispatcher.config import setup
 
 logger = logging.getLogger(__name__)
@@ -35,11 +32,4 @@ def standalone() -> None:
 
     setup(file_path=args.config)
 
-    loop = asyncio.get_event_loop()
-    dispatcher = DispatcherMain.from_config()
-    try:
-        loop.run_until_complete(dispatcher.main())
-    except KeyboardInterrupt:
-        logger.info('CLI entry point leaving')
-    finally:
-        loop.close()
+    run_service()

@@ -93,7 +93,7 @@ class DispatcherMain:
         return cls(settings.service, producers)
 
     @classmethod
-    def get_producers(cls) -> list[producer_module.BaseProducer]:
+    def get_producers(cls) -> Iterable[producer_module.BaseProducer]:
         producers = []
         for broker_name, broker_kwargs in settings.brokers:
             broker = producer_module.BrokeredProducer.get_async_broker(broker_name, broker_kwargs)
@@ -130,7 +130,8 @@ class DispatcherMain:
     async def wait_for_producers_ready(self) -> None:
         "Returns when all the producers have hit their ready event"
         for producer in self.producers:
-            await producer.events.ready_event.wait()
+            if producer.events:
+                await producer.events.ready_event.wait()
 
     async def connect_signals(self) -> None:
         loop = asyncio.get_event_loop()
