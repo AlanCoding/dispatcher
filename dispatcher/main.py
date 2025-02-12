@@ -95,12 +95,12 @@ class DispatcherMain:
     @classmethod
     def get_producers(cls) -> Iterable[producer_module.BaseProducer]:
         producers = []
-        for broker_name, broker_kwargs in settings.brokers:
+        for broker_name, broker_kwargs in settings.brokers.items():
             broker = producer_module.BrokeredProducer.get_async_broker(broker_name, broker_kwargs)
             producer = producer_module.BrokeredProducer(broker=broker)
             producers.append(producer)
 
-        for producer_cls, producer_kwargs in settings.producers:
+        for producer_cls, producer_kwargs in settings.producers.items():
             producers.append(getattr(producer_module, producer_cls)(**producer_kwargs))
 
         return producers

@@ -80,8 +80,8 @@ class PoolWorker:
 
 
 class WorkerPool:
-    def __init__(self, num_workers: int, fd_lock: Optional[asyncio.Lock] = None):
-        self.num_workers = num_workers
+    def __init__(self, max_workers: int, fd_lock: Optional[asyncio.Lock] = None):
+        self.max_workers = max_workers
         self.workers: dict[int, PoolWorker] = {}
         self.next_worker_id = 0
         self.finished_queue: multiprocessing.Queue = multiprocessing.Queue()
@@ -124,7 +124,7 @@ class WorkerPool:
     async def manage_workers(self) -> None:
         """Enforces worker policy like min and max workers, and later, auto scale-down"""
         while not self.shutting_down:
-            while len(self.workers) < self.num_workers:
+            while len(self.workers) < self.max_workers:
                 await self.up()
 
             # TODO: if all workers are busy, queue has unblocked work, below max_workers

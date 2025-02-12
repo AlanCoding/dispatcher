@@ -40,15 +40,12 @@ def settings_from_env() -> DispatcherSettings:
     raise RuntimeError('Dispatcher not configured, set DISPATCHER_CONFIG_FILE or call dispatcher.config.setup')
 
 
-empty = object()
-
-
 class LazySettings:
     def __init__(self) -> None:
         self._wrapped: Optional[DispatcherSettings] = None
 
     def __getattr__(self, name):
-        if self._wrapped is empty:
+        if self._wrapped is None:
             self._setup()
         return getattr(self._wrapped, name)
 
@@ -64,7 +61,8 @@ def setup(config: Optional[dict] = None, file_path: Optional[str] = None):
         settings._wrapped = DispatcherSettings(config)
     elif file_path:
         settings._wrapped = settings_from_file(file_path)
-    settings._wrapped = settings_from_env()
+    else:
+        settings._wrapped = settings_from_env()
 
 
 @contextmanager

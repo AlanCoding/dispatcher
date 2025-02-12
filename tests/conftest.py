@@ -11,7 +11,7 @@ import pytest_asyncio
 from dispatcher.main import DispatcherMain
 from dispatcher.control import Control
 
-from dispatcher.brokers.pg_notify import apublish_message, aget_connection, get_connection
+from dispatcher.brokers.pg_notify import SyncBroker, AsyncBroker
 
 
 # List of channels to listen on
@@ -21,10 +21,8 @@ CHANNELS = ['test_channel', 'test_channel2', 'test_channel3']
 CONNECTION_STRING = "dbname=dispatch_db user=dispatch password=dispatching host=localhost port=55777"
 
 BASIC_CONFIG = {
-    "producers": {
-        "BrokeredProducer": {
-            # fixture fills in connection details
-            "broker": "pg_notify",
+    "brokers": {
+        "pg_notify": {
             "channels": CHANNELS
         }
     },
@@ -38,7 +36,7 @@ BASIC_CONFIG = {
 async def aconnection_for_test():
     conn = None
     try:
-        conn = await aget_connection({'conninfo': CONNECTION_STRING})
+        conn = await AsyncBroker.create_connection({'conninfo': CONNECTION_STRING})
 
         # Make sure database is running to avoid deadlocks which can come
         # from using the loop provided by pytest asyncio
@@ -87,7 +85,8 @@ async def apg_dispatcher(conn_config) -> AsyncIterator[DispatcherMain]:
 @pytest_asyncio.fixture(loop_scope="function", scope="function")
 async def pg_message(psycopg_conn) -> Callable:
     async def _rf(message, channel='test_channel'):
-        await apublish_message(psycopg_conn, channel, message)
+        broker = AsyncBroker(connection=psycopg_conn)
+        await broker.apublish_message(channel, message)
     return _rf
 
 

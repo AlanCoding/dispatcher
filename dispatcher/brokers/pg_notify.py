@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Iterable, Optional
 
 import psycopg
 
@@ -17,24 +18,51 @@ Thus, all psycopg-lib-specific actions must happen here.
 
 
 class PGNotifyBase(BaseBroker):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self._config:
-            self._config = self._config.copy()
-            self._config['autocommit'] = True
+
+    def __init__(
+        self,
+        channels: Iterable[str] = ('dispatcher_default',),
+        default_publish_channel: str = 'dispatcher_default',
+    ) -> None:
+        self.channels = channels
+        self.default_publish_channel = default_publish_channel
 
 
 class AsyncBroker(PGNotifyBase):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        async_connection_factory: Optional[str] = None,
+        sync_connection_factory: Optional[str] = None,  # noqa
+        connection: Optional[psycopg.AsyncConnection] = None,
+        **kwargs,
+    ) -> None:
+        if not (config or async_connection_factory or connection):
+            raise RuntimeError('Must specify either config or async_connection_factory')
+
+        if config:
+            self._config: Optional[dict] = config.copy()
+            self._config['autocommit'] = True
+        else:
+            self._config = None
+
+        self._async_connection_factory = async_connection_factory
+        self._connection: Optional[Any] = connection
+
+        super().__init__(**kwargs)
+
     async def get_connection(self) -> psycopg.AsyncConnection:
         if not self._connection:
             if self._async_connection_factory:
                 factory = resolve_callable(self._async_connection_factory)
+                if not factory:
+                    raise RuntimeError(f'Could not import connection factory {self._async_connection_factory}')
                 if self._config:
                     self._connection = await factory(**self._config)
                 else:
                     self._connection = await factory()
             elif self._config:
-                self._connection = await AsyncBroker.create_connection(**self._config)
+                self._connection = await AsyncBroker.create_connection(self._config)
             else:
                 raise RuntimeError('Could not construct async connection for lack of config or factory')
         return self._connection
@@ -58,8 +86,10 @@ class AsyncBroker(PGNotifyBase):
                 async for notify in connection.notifies():
                     yield notify.channel, notify.payload
 
-    async def apublish_message(self, channel, payload=None) -> None:
+    async def apublish_message(self, channel: Optional[str] = None, payload=None) -> None:
         connection = await self.get_connection()
+        if not channel:
+            channel = self.default_publish_channel
         async with connection.cursor() as cur:
             if not payload:
                 await cur.execute(f'NOTIFY {channel};')
@@ -89,6 +119,27 @@ def connection_saver(**config):
 
 
 class SyncBroker(PGNotifyBase):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        async_connection_factory: Optional[str] = None,  # noqa
+        sync_connection_factory: Optional[str] = None,
+        connection: Optional[psycopg.Connection] = None,
+        **kwargs,
+    ) -> None:
+        if not (config or sync_connection_factory or connection):
+            raise RuntimeError('Must specify either config or async_connection_factory')
+
+        if config:
+            self._config: Optional[dict] = config.copy()
+            self._config['autocommit'] = True
+        else:
+            self._config = None
+
+        self._sync_connection_factory = sync_connection_factory
+        self._connection: Optional[Any] = connection
+        super().__init__(**kwargs)
+
     def get_connection(self) -> psycopg.Connection:
         if not self._connection:
             if self._sync_connection_factory:
@@ -100,7 +151,7 @@ class SyncBroker(PGNotifyBase):
                 else:
                     self._connection = factory()
             elif self._config:
-                self._connection = SyncBroker.create_connection(**self._config)
+                self._connection = SyncBroker.create_connection(self._config)
             else:
                 raise RuntimeError('Cound not construct synchronous connection for lack of config or factory')
         return self._connection
@@ -109,13 +160,15 @@ class SyncBroker(PGNotifyBase):
     def create_connection(config) -> psycopg.Connection:
         return psycopg.Connection.connect(**config)
 
-    def publish_message(self, queue, message):
+    def publish_message(self, channel: Optional[str], message: dict) -> None:
         connection = self.get_connection()
+        if not channel:
+            channel = self.default_publish_channel
 
         with connection.cursor() as cur:
-            cur.execute('SELECT pg_notify(%s, %s);', (queue, message))
+            cur.execute('SELECT pg_notify(%s, %s);', (channel, message))
 
-        logger.debug(f'Sent pg_notify message to {queue}')
+        logger.debug(f'Sent pg_notify message to {channel}')
 
     def close(self) -> None:
         if self._connection:
