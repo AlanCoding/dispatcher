@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Iterable, Optional
 
 from dispatcher import producers as producer_module
+from dispatcher.brokers import get_async_broker
 from dispatcher.config import settings
 from dispatcher.pool import WorkerPool
 from dispatcher.utils import MODULE_METHOD_DELIMITER
@@ -103,7 +104,7 @@ class DispatcherMain:
     def get_producers(cls) -> Iterable[producer_module.BaseProducer]:
         producers = []
         for broker_name, broker_kwargs in settings.brokers.items():
-            broker = producer_module.BrokeredProducer.get_async_broker(broker_name, broker_kwargs)
+            broker = get_async_broker(broker_name, broker_kwargs)
             producer = producer_module.BrokeredProducer(broker=broker)
             producers.append(producer)
 

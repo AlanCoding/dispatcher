@@ -4,9 +4,10 @@ import logging
 import os
 import sys
 
-from dispatcher.brokers.pg_notify import publish_message
+from dispatcher.brokers import get_sync_broker
 from dispatcher.control import Control
 from dispatcher.utils import MODULE_METHOD_DELIMITER
+from dispatcher.config import setup, settings
 
 # Add the test methods to the path so we can use .delay type contracts
 tools_dir = os.path.abspath(
@@ -28,37 +29,43 @@ TEST_MSGS = [
 ]
 
 
+setup(file_path='dispatcher.yml')
+
+
+broker = get_sync_broker('pg_notify', settings.brokers['pg_notify'])
+
+
 def main():
     print('writing some basic test messages')
     for channel, message in TEST_MSGS:
         # Send the notification
-        publish_message(channel, message, config={'conninfo': CONNECTION_STRING})
+        broker.publish_message(channel=channel, message=message)
         # await send_notification(channel, message)
     # send more than number of workers quickly
     print('')
     print('writing 15 messages fast')
     for i in range(15):
-        publish_message('test_channel', f'lambda: {i}', config={'conninfo': CONNECTION_STRING})
+        broker.publish_message(message=f'lambda: {i}')
 
     print('')
     print('performing a task cancel')
     # submit a task we will "find" two different ways
-    publish_message(channel, json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar'}), config={'conninfo': CONNECTION_STRING})
+    broker.publish_message(message=json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar'}))
     ctl = Control('test_channel', config={'conninfo': CONNECTION_STRING})
     canceled_jobs = ctl.control_with_reply('cancel', data={'uuid': 'foobar'})
     print(json.dumps(canceled_jobs, indent=2))
 
     print('')
     print('finding a running task by its task name')
-    publish_message(channel, json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar2'}), config={'conninfo': CONNECTION_STRING})
+    broker.publish_message(message=json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar2'}))
     running_data = ctl.control_with_reply('running', data={'task': 'lambda: __import__("time").sleep(3.1415)'})
     print(json.dumps(running_data, indent=2))
 
     print('writing a message with a delay')
     print('     4 second delay task')
-    publish_message(channel, json.dumps({'task': 'lambda: 123421', 'uuid': 'foobar2', 'delay': 4}), config={'conninfo': CONNECTION_STRING})
+    broker.publish_message(message=json.dumps({'task': 'lambda: 123421', 'uuid': 'foobar2', 'delay': 4}))
     print('     30 second delay task')
-    publish_message(channel, json.dumps({'task': 'lambda: 987987234', 'uuid': 'foobar2', 'delay': 30}), config={'conninfo': CONNECTION_STRING})
+    broker.publish_message(message=json.dumps({'task': 'lambda: 987987234', 'uuid': 'foobar2', 'delay': 30}))
     print('     10 second delay task')
     # NOTE: this task will error unless you run the dispatcher itself with it in the PYTHONPATH, which is intended
     sleep_function.apply_async(
@@ -88,31 +95,31 @@ def main():
     print('')
     print('demo of submitting discarding tasks')
     for i in range(10):
-        publish_message(channel, json.dumps(
+        broker.publish_message(json.dumps(
             {'task': 'lambda: __import__("time").sleep(9)', 'on_duplicate': 'discard', 'uuid': f'dscd-{i}'}
-        ), config={'conninfo': CONNECTION_STRING})
+        ))
     print('demo of discarding task marked as discarding')
     for i in range(10):
-        sleep_discard.apply_async(args=[2], config={'conninfo': CONNECTION_STRING})
+        sleep_discard.apply_async(args=[2])
     print('demo of discarding tasks with apply_async contract')
     for i in range(10):
-        sleep_function.apply_async(args=[3], on_duplicate='discard', config={'conninfo': CONNECTION_STRING})
+        sleep_function.apply_async(args=[3], on_duplicate='discard')
     print('demo of submitting waiting tasks')
     for i in range(10):
-        publish_message(channel, json.dumps(
+        broker.publish_message(json.dumps(
             {'task': 'lambda: __import__("time").sleep(10)', 'on_duplicate': 'serial', 'uuid': f'wait-{i}'}
-            ), config={'conninfo': CONNECTION_STRING})
+            ))
     print('demo of submitting queue-once tasks')
     for i in range(10):
-        publish_message(channel, json.dumps(
+        broker.publish_message(json.dumps(
             {'task': 'lambda: __import__("time").sleep(8)', 'on_duplicate': 'queue_one', 'uuid': f'queue_one-{i}'}
-        ), config={'conninfo': CONNECTION_STRING})
+        ))
 
     print('demo of task_has_timeout that times out due to decorator use')
-    task_has_timeout.apply_async(config={'conninfo': CONNECTION_STRING})
+    task_has_timeout.delay()
 
     print('demo of using bind=True, with hello_world_binder')
-    hello_world_binder.apply_async(config={'conninfo': CONNECTION_STRING})
+    hello_world_binder.delay()
 
 if __name__ == "__main__":
     logging.basicConfig(level='ERROR', stream=sys.stdout)

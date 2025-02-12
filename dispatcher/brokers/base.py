@@ -2,7 +2,6 @@ from abc import abstractmethod
 
 
 class BaseBroker:
-
     @abstractmethod
     async def connect(self): ...
 

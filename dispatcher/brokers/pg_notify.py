@@ -102,7 +102,12 @@ class AsyncBroker(PGNotifyBase):
             self._connection = None
 
 
-connection_save = object()
+class ConnectionSaver:
+    def __init__(self):
+        self._connection = None
+
+
+connection_save = ConnectionSaver()
 
 
 def connection_saver(**config):
@@ -112,9 +117,9 @@ def connection_saver(**config):
     or otherwise has its own connection management logic.
     Dispatcher does not manage connections, so this a simulation of that.
     """
-    if not hasattr(connection_save, '_connection'):
+    if connection_save._connection is None:
         config['autocommit'] = True
-        connection_save._connection = SyncBroker.connect(**config)
+        connection_save._connection = SyncBroker.create_connection(config)
     return connection_save._connection
 
 
@@ -160,7 +165,7 @@ class SyncBroker(PGNotifyBase):
     def create_connection(config) -> psycopg.Connection:
         return psycopg.Connection.connect(**config)
 
-    def publish_message(self, channel: Optional[str], message: dict) -> None:
+    def publish_message(self, channel: Optional[str] = None, message: str = '') -> None:
         connection = self.get_connection()
         if not channel:
             channel = self.default_publish_channel

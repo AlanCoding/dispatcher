@@ -6,7 +6,7 @@ import time
 from typing import Callable, Optional, Set, Tuple
 from uuid import uuid4
 
-from dispatcher.producers.brokered import BrokeredProducer
+from dispatcher.brokers import get_sync_broker
 from dispatcher.utils import MODULE_METHOD_DELIMITER, DispatcherCallable, resolve_callable
 
 logger = logging.getLogger(__name__)
@@ -94,9 +94,8 @@ class DispatcherMethod:
 
         from dispatcher.conf import settings
 
-        for broker_name, broker_kwargs in settings.brokers.items():
-            broker = BrokeredProducer.get_sync_broker(broker_name, broker_kwargs)
-            break
+        publish_broker = settings.publish['default_broker']
+        broker = get_sync_broker(publish_broker, settings.brokers[publish_broker])
 
         # TODO: before sending, consult an app-specific callback if configured
 

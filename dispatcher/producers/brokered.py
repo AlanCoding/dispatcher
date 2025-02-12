@@ -1,17 +1,11 @@
 import asyncio
-import importlib
 import logging
-from types import ModuleType
 from typing import Optional
 
 from dispatcher.brokers.base import BaseBroker
 from dispatcher.producers.base import BaseProducer
 
 logger = logging.getLogger(__name__)
-
-
-def get_broker_module(broker_name) -> ModuleType:
-    return importlib.import_module(f'dispatcher.brokers.{broker_name}')
 
 
 class BrokeredProducer(BaseProducer):
@@ -21,18 +15,6 @@ class BrokeredProducer(BaseProducer):
         self.close_on_exit = close_on_exit
         self.dispatcher = None
         super().__init__()
-
-    @classmethod
-    def get_async_broker(cls, broker_name, broker_config) -> BaseBroker:
-        broker_module = get_broker_module(broker_name)
-        broker_cls = getattr(broker_module, 'AsyncBroker')
-        return broker_cls(**broker_config)
-
-    @classmethod
-    def get_sync_broker(cls, broker_name, broker_config) -> BaseBroker:
-        broker_module = get_broker_module(broker_name)
-        broker_cls = getattr(broker_module, 'SyncBroker')
-        return broker_cls(**broker_config)
 
     async def start_producing(self, dispatcher) -> None:
         self.production_task = asyncio.create_task(self.produce_forever(dispatcher), name=f'{self.broker}_production')
