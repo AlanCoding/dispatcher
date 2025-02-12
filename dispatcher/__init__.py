@@ -12,7 +12,7 @@ def run_service() -> None:
     Before calling this you need to configure by calling dispatcher.config.setup
     """
     loop = asyncio.get_event_loop()
-    dispatcher = DispatcherMain.from_config()
+    dispatcher = DispatcherMain.from_settings()
     try:
         loop.run_until_complete(dispatcher.main())
     except KeyboardInterrupt:

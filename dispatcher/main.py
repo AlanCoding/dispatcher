@@ -96,12 +96,12 @@ class DispatcherMain:
         self.events: DispatcherEvents = DispatcherEvents()
 
     @classmethod
-    def from_config(cls) -> 'DispatcherMain':
-        producers = DispatcherMain.get_producers()
+    def from_settings(cls) -> 'DispatcherMain':
+        producers = DispatcherMain.producers_from_settings()
         return cls(settings.service, producers)
 
     @classmethod
-    def get_producers(cls) -> Iterable[producer_module.BaseProducer]:
+    def producers_from_settings(cls) -> Iterable[producer_module.BaseProducer]:
         producers = []
         for broker_name, broker_kwargs in settings.brokers.items():
             broker = get_async_broker(broker_name, broker_kwargs)

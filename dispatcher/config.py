@@ -4,26 +4,16 @@ from typing import Optional
 
 import yaml
 
-from dispatcher.publish import DispatcherDecorator
-from dispatcher.registry import DispatcherMethodRegistry, registry
-from dispatcher.utils import resolve_callable
-
 
 class DispatcherSettings:
-    def __init__(self, config: dict, task_registry: DispatcherMethodRegistry = registry) -> None:
+    def __init__(self, config: dict) -> None:
         self.brokers: list = config.get('brokers', [])
         self.producers: list = config.get('producers', [])
         self.service: dict = config.get('service', {'max_workers': 3})
-        self.callbacks: dict = config.get('callbacks', {})
-        self.tasks: dict = config.get('tasks', {})
-        self.settings: dict = config.get('settings', {})
-
-        for task_name, options in self.tasks.items():
-            method = resolve_callable(task_name)
-            if method:
-                DispatcherDecorator(task_registry, **options)(method)
-            else:
-                raise RuntimeError(f'Could not locate task given in config: {task_name}')
+        self.publish: dict = config.get('publish', {})
+        # TODO: firmly planned sections of config for later
+        # self.callbacks: dict = config.get('callbacks', {})
+        # self.options: dict = config.get('options', {})
 
 
 def settings_from_file(path: str) -> DispatcherSettings:
