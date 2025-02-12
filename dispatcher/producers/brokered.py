@@ -5,7 +5,7 @@ from types import ModuleType
 from typing import Optional
 
 from dispatcher.brokers.base import BaseBroker
-from dispatcher.producers.base import BaseProducer, ProducerEvents
+from dispatcher.producers.base import BaseProducer
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +16,11 @@ def get_broker_module(broker_name) -> ModuleType:
 
 class BrokeredProducer(BaseProducer):
     def __init__(self, broker: BaseBroker, close_on_exit: bool = True) -> None:
-        self.events = ProducerEvents()
         self.production_task: Optional[asyncio.Task] = None
         self.broker = broker
         self.close_on_exit = close_on_exit
         self.dispatcher = None
+        super().__init__()
 
     @classmethod
     def get_async_broker(cls, broker_name, broker_config) -> BaseBroker:
@@ -53,6 +53,7 @@ class BrokeredProducer(BaseProducer):
     async def produce_forever(self, dispatcher) -> None:
         self.dispatcher = dispatcher
         async for channel, payload in self.broker.aprocess_notify(connected_callback=self.connected_callback):
+            self.produced_count += 1
             await dispatcher.process_message(payload, broker=self, channel=channel)
 
     async def notify(self, channel: str, payload: Optional[str] = None) -> None:

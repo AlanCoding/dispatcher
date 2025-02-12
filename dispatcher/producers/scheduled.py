@@ -1,17 +1,16 @@
 import asyncio
 import logging
 
-from dispatcher.producers.base import BaseProducer, ProducerEvents
+from dispatcher.producers.base import BaseProducer
 
 logger = logging.getLogger(__name__)
 
 
 class ScheduledProducer(BaseProducer):
     def __init__(self, task_schedule: dict):
-        self.events = ProducerEvents()
         self.task_schedule = task_schedule
         self.scheduled_tasks: list[asyncio.Task] = []
-        self.produced_count = 0
+        super().__init__()
 
     async def start_producing(self, dispatcher) -> None:
         for task_name, options in self.task_schedule.items():
