@@ -12,6 +12,7 @@ from dispatcher.main import DispatcherMain
 from dispatcher.control import Control
 
 from dispatcher.brokers.pg_notify import SyncBroker, AsyncBroker
+from dispatcher.registry import DispatcherMethodRegistry
 
 
 # List of channels to listen on
@@ -104,3 +105,9 @@ async def pg_control() -> AsyncIterator[Control]:
 async def psycopg_conn():
     async with aconnection_for_test() as conn:
         yield conn
+
+
+@pytest.fixture
+def registry() -> DispatcherMethodRegistry:
+    "Return a fresh registry, separate from the global one, for testing"
+    return DispatcherMethodRegistry()

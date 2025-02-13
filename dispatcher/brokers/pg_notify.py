@@ -22,7 +22,7 @@ class PGNotifyBase(BaseBroker):
     def __init__(
         self,
         channels: Iterable[str] = ('dispatcher_default',),
-        default_publish_channel: str = 'dispatcher_default',
+        default_publish_channel: Optional[str] = None,
     ) -> None:
         self.channels = channels
         self.default_publish_channel = default_publish_channel
@@ -167,7 +167,9 @@ class SyncBroker(PGNotifyBase):
 
     def publish_message(self, channel: Optional[str] = None, message: str = '') -> None:
         connection = self.get_connection()
-        if not channel:
+        if channel is None:
+            if self.default_publish_channel is None:
+                raise ValueError('Could not determine a channel to use publish to from settings or PGNotify config')
             channel = self.default_publish_channel
 
         with connection.cursor() as cur:

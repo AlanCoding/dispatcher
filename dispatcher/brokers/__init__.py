@@ -1,4 +1,5 @@
 import importlib
+from typing import Optional
 from types import ModuleType
 
 from dispatcher.brokers.base import BaseBroker
@@ -19,8 +20,16 @@ def get_sync_broker(broker_name, broker_config) -> BaseBroker:
     return broker_module.SyncBroker(**broker_config)
 
 
-def get_sync_publisher_from_settings() -> BaseBroker:
-    publish_broker = settings.publish['default_broker']
+def get_sync_publisher_from_settings(publish_broker: Optional[str] = None) -> BaseBroker:
+    if publish_broker:
+        pass
+    elif len(settings.brokers) == 1:
+        publish_broker = list(settings.brokers.keys())[0]
+    elif 'default_broker' in settings.publish:
+        publish_broker = settings.publish['default_broker']
+    else:
+        raise RuntimeError(f'Could not determine which broker to publish with between options {list(settings.brokers.keys())}')
+
     return get_sync_broker(publish_broker, settings.brokers[publish_broker])
 
 
