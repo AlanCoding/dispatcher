@@ -5,11 +5,8 @@ import signal
 from types import SimpleNamespace
 from typing import Iterable, Optional
 
-from dispatcher import producers as producer_module
-from dispatcher.brokers import get_async_broker
-from dispatcher.config import settings
 from dispatcher.pool import WorkerPool
-from dispatcher.utils import MODULE_METHOD_DELIMITER
+from dispatcher.producers import BaseProducer
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +76,7 @@ class DispatcherEvents:
 
 
 class DispatcherMain:
-    def __init__(self, service_config: dict, producers: Iterable[producer_module.BaseProducer]):
+    def __init__(self, service_config: dict, producers: Iterable[BaseProducer]):
         self.delayed_messages: list[SimpleNamespace] = []
         self.received_count = 0
         self.control_count = 0
@@ -94,24 +91,6 @@ class DispatcherMain:
         self.producers = producers
 
         self.events: DispatcherEvents = DispatcherEvents()
-
-    @classmethod
-    def from_settings(cls) -> 'DispatcherMain':
-        producers = DispatcherMain.producers_from_settings()
-        return cls(settings.service, producers)
-
-    @classmethod
-    def producers_from_settings(cls) -> Iterable[producer_module.BaseProducer]:
-        producers = []
-        for broker_name, broker_kwargs in settings.brokers.items():
-            broker = get_async_broker(broker_name, broker_kwargs)
-            producer = producer_module.BrokeredProducer(broker=broker)
-            producers.append(producer)
-
-        for producer_cls, producer_kwargs in settings.producers.items():
-            producers.append(getattr(producer_module, producer_cls)(**producer_kwargs))
-
-        return producers
 
     def _create_events(self):
         "Benchmark tests have to re-create this because they use same object in different event loops"
@@ -174,7 +153,7 @@ class DispatcherMain:
         logger.debug('Setting event to exit main loop')
         self.events.exit_event.set()
 
-    async def connected_callback(self, producer: producer_module.BaseProducer) -> None:
+    async def connected_callback(self, producer: BaseProducer) -> None:
         return
 
     async def sleep_then_process(self, capsule: SimpleNamespace) -> None:
@@ -194,7 +173,7 @@ class DispatcherMain:
         capsule.task = new_task
         self.delayed_messages.append(capsule)
 
-    async def process_message(self, payload: dict, broker: Optional[producer_module.BrokeredProducer] = None, channel: Optional[str] = None) -> None:
+    async def process_message(self, payload: dict, producer: Optional[BaseProducer] = None, channel: Optional[str] = None) -> None:
         # Convert payload from client into python dict
         # TODO: more structured validation of the incoming payload from publishers
         if isinstance(payload, str):
@@ -219,9 +198,9 @@ class DispatcherMain:
             # NOTE: control messages with reply should never be delayed, document this for users
             self.create_delayed_task(message)
         else:
-            await self.process_message_internal(message, broker=broker)
+            await self.process_message_internal(message, producer=producer)
 
-    async def process_message_internal(self, message: dict, broker=None) -> None:
+    async def process_message_internal(self, message: dict, producer=None) -> None:
         if 'control' in message:
             method = getattr(self.ctl_tasks, message['control'])
             control_data = message.get('control_data', {})
@@ -231,9 +210,8 @@ class DispatcherMain:
                 self.control_count += 1
                 await self.pool.dispatch_task(
                     {
-                        'task': f'dispatcher.brokers.{broker.broker}{MODULE_METHOD_DELIMITER}publish_message',
+                        'task': 'dispatcher.tasks.reply_to_control',
                         'args': [message['reply_to'], json.dumps(returned)],
-                        'kwargs': {'config': broker.config, 'new_connection': True},
                         'uuid': f'control-{self.control_count}',
                         'control': 'reply',  # for record keeping
                     }

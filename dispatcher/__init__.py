@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from dispatcher.main import DispatcherMain
+from dispatcher.factories import from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +12,7 @@ def run_service() -> None:
     Before calling this you need to configure by calling dispatcher.config.setup
     """
     loop = asyncio.get_event_loop()
-    dispatcher = DispatcherMain.from_settings()
+    dispatcher = from_settings()
     try:
         loop.run_until_complete(dispatcher.main())
     except KeyboardInterrupt:

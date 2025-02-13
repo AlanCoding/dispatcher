@@ -6,7 +6,6 @@ import time
 from typing import Callable, Optional, Set, Tuple
 from uuid import uuid4
 
-from dispatcher.brokers import get_sync_publisher_from_settings
 from dispatcher.utils import MODULE_METHOD_DELIMITER, DispatcherCallable, resolve_callable
 
 logger = logging.getLogger(__name__)
@@ -87,6 +86,8 @@ class DispatcherMethod:
             queue = queue()
 
         obj = self.get_async_body(args=args, kwargs=kwargs, uuid=uuid, **kw)
+
+        from dispatcher.factories import get_sync_publisher_from_settings
 
         broker = get_sync_publisher_from_settings()
 

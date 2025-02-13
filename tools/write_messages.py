@@ -4,10 +4,10 @@ import logging
 import os
 import sys
 
-from dispatcher.brokers import get_sync_broker
+from dispatcher.factories import get_sync_publisher_from_settings
 from dispatcher.control import Control
 from dispatcher.utils import MODULE_METHOD_DELIMITER
-from dispatcher.config import setup, settings
+from dispatcher.config import setup
 
 # Add the test methods to the path so we can use .delay type contracts
 tools_dir = os.path.abspath(
@@ -18,8 +18,12 @@ sys.path.append(tools_dir)
 
 from test_methods import sleep_function, sleep_discard, task_has_timeout, hello_world_binder
 
-# Database connection details
-CONNECTION_STRING = "dbname=dispatch_db user=dispatch password=dispatching host=localhost port=55777"
+
+# Setup the global config from the settings file shared with the service
+setup(file_path='dispatcher.yml')
+
+
+broker = get_sync_publisher_from_settings()
 
 
 TEST_MSGS = [
@@ -27,12 +31,6 @@ TEST_MSGS = [
     ('test_channel2', 'lambda: __import__("time").sleep(1)'),
     ('test_channel', 'lambda: __import__("time").sleep(1)'),
 ]
-
-
-setup(file_path='dispatcher.yml')
-
-
-broker = get_sync_broker('pg_notify', settings.brokers['pg_notify'])
 
 
 def main():
@@ -51,7 +49,7 @@ def main():
     print('performing a task cancel')
     # submit a task we will "find" two different ways
     broker.publish_message(message=json.dumps({'task': 'lambda: __import__("time").sleep(3.1415)', 'uuid': 'foobar'}))
-    ctl = Control('test_channel', config={'conninfo': CONNECTION_STRING})
+    ctl = Control('test_channel')
     canceled_jobs = ctl.control_with_reply('cancel', data={'uuid': 'foobar'})
     print(json.dumps(canceled_jobs, indent=2))
 
@@ -71,7 +69,6 @@ def main():
     sleep_function.apply_async(
         args=[3],  # sleep 3 seconds
         delay=10,
-        config={'conninfo': CONNECTION_STRING}
     )
 
     print('')
@@ -95,7 +92,7 @@ def main():
     print('')
     print('demo of submitting discarding tasks')
     for i in range(10):
-        broker.publish_message(json.dumps(
+        broker.publish_message(message=json.dumps(
             {'task': 'lambda: __import__("time").sleep(9)', 'on_duplicate': 'discard', 'uuid': f'dscd-{i}'}
         ))
     print('demo of discarding task marked as discarding')
@@ -106,12 +103,12 @@ def main():
         sleep_function.apply_async(args=[3], on_duplicate='discard')
     print('demo of submitting waiting tasks')
     for i in range(10):
-        broker.publish_message(json.dumps(
+        broker.publish_message(message=json.dumps(
             {'task': 'lambda: __import__("time").sleep(10)', 'on_duplicate': 'serial', 'uuid': f'wait-{i}'}
             ))
     print('demo of submitting queue-once tasks')
     for i in range(10):
-        broker.publish_message(json.dumps(
+        broker.publish_message(message=json.dumps(
             {'task': 'lambda: __import__("time").sleep(8)', 'on_duplicate': 'queue_one', 'uuid': f'queue_one-{i}'}
         ))
 

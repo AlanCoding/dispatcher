@@ -7,8 +7,8 @@ import yaml
 
 class DispatcherSettings:
     def __init__(self, config: dict) -> None:
-        self.brokers: list = config.get('brokers', [])
-        self.producers: list = config.get('producers', [])
+        self.brokers: dict = config.get('brokers', [])
+        self.producers: dict = config.get('producers', [])
         self.service: dict = config.get('service', {'max_workers': 3})
         self.publish: dict = config.get('publish', {})
         # TODO: firmly planned sections of config for later
