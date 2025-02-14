@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from typing import Optional
 
 
 class BaseBroker:
@@ -9,7 +10,7 @@ class BaseBroker:
     async def aprocess_notify(self, connected_callback=None): ...
 
     @abstractmethod
-    async def apublish_message(self, channel, payload=None) -> None: ...
+    async def apublish_message(self, channel: Optional[str] = None, message: str = '') -> None: ...
 
     @abstractmethod
     async def aclose(self) -> None: ...

@@ -13,6 +13,8 @@ from dispatcher.control import Control
 
 from dispatcher.brokers.pg_notify import SyncBroker, AsyncBroker
 from dispatcher.registry import DispatcherMethodRegistry
+from dispatcher.config import temporary_settings
+from dispatcher.factories import from_settings
 
 
 # List of channels to listen on
@@ -24,7 +26,10 @@ CONNECTION_STRING = "dbname=dispatch_db user=dispatch password=dispatching host=
 BASIC_CONFIG = {
     "brokers": {
         "pg_notify": {
-            "channels": CHANNELS
+            "channels": CHANNELS,
+            "config": {'conninfo': CONNECTION_STRING},
+            "sync_connection_factory": "dispatcher.brokers.pg_notify.connection_saver",
+            # "async_connection_factory": "dispatcher.brokers.pg_notify.async_connection_saver",
         }
     },
     "pool": {
@@ -37,7 +42,7 @@ BASIC_CONFIG = {
 async def aconnection_for_test():
     conn = None
     try:
-        conn = await AsyncBroker.create_connection({'conninfo': CONNECTION_STRING})
+        conn = await AsyncBroker.create_connection(conninfo=CONNECTION_STRING, autocommit=True)
 
         # Make sure database is running to avoid deadlocks which can come
         # from using the loop provided by pytest asyncio
@@ -58,27 +63,31 @@ def conn_config():
 
 @pytest.fixture
 def pg_dispatcher() -> DispatcherMain:
-    return DispatcherMain(BASIC_CONFIG)
+    # We can not reuse the connection between tests
+    config = BASIC_CONFIG.copy()
+    config['brokers']['pg_notify'].pop('async_connection_factory')
+    return DispatcherMain(config)
+
+
+@pytest.fixture
+def test_setup():
+    with temporary_settings(BASIC_CONFIG):
+        yield
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")
-async def apg_dispatcher(conn_config) -> AsyncIterator[DispatcherMain]:
-    # need to make a new connection because it can not be same as publisher
-    async with aconnection_for_test() as conn:
-        config = BASIC_CONFIG.copy()
-        config['producers']['BrokeredProducer']['connection'] = conn
-        # We have to fill in the config so that replies can still be sent in workers
-        # the workers may establish a new psycopg connection
-        config['producers']['BrokeredProducer']['config'] = conn_config
-        try:
-            dispatcher = DispatcherMain(config)
+async def apg_dispatcher(test_setup) -> AsyncIterator[DispatcherMain]:
+    dispatcher = None
+    try:
+        dispatcher = from_settings()
 
-            await dispatcher.connect_signals()
-            await dispatcher.start_working()
-            await dispatcher.wait_for_producers_ready()
+        await dispatcher.connect_signals()
+        await dispatcher.start_working()
+        await dispatcher.wait_for_producers_ready()
 
-            yield dispatcher
-        finally:
+        yield dispatcher
+    finally:
+        if dispatcher:
             await dispatcher.shutdown()
             await dispatcher.cancel_tasks()
 
@@ -87,18 +96,18 @@ async def apg_dispatcher(conn_config) -> AsyncIterator[DispatcherMain]:
 async def pg_message(psycopg_conn) -> Callable:
     async def _rf(message, channel='test_channel'):
         broker = AsyncBroker(connection=psycopg_conn)
-        await broker.apublish_message(channel, message)
+        await broker.apublish_message(channel=channel, message=message)
     return _rf
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")
-async def pg_control() -> AsyncIterator[Control]:
+async def pg_control(test_setup) -> AsyncIterator[Control]:
     """This has to use a different connection from dispatcher itself
 
     because psycopg will pool async connections, meaning that submission
     for the control task would be blocked by the listening query of the dispatcher itself"""
     async with aconnection_for_test() as conn:
-        yield Control('test_channel', async_connection=conn)
+        yield Control(queue='test_channel')
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")

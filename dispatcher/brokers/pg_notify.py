@@ -107,41 +107,22 @@ class AsyncBroker(PGNotifyBase):
                 async for notify in connection.notifies():
                     yield notify.channel, notify.payload
 
-    async def apublish_message(self, channel: Optional[str] = None, payload=None) -> None:
+    async def apublish_message(self, channel: Optional[str] = None, message: str = '') -> None:
         connection = await self.get_connection()
         channel = self.get_publish_channel(channel)
 
         async with connection.cursor() as cur:
-            if not payload:
+            if not message:
                 await cur.execute(f'NOTIFY {channel};')
             else:
-                await cur.execute(f"NOTIFY {channel}, '{payload}';")
+                await cur.execute(f"NOTIFY {channel}, '{message}';")
+
+        logger.debug(f'Sent pg_notify message of {len(message)} chars to {channel}')
 
     async def aclose(self) -> None:
         if self._connection:
             await self._connection.close()
             self._connection = None
-
-
-class ConnectionSaver:
-    def __init__(self):
-        self._connection = None
-
-
-connection_save = ConnectionSaver()
-
-
-def connection_saver(**config):
-    """
-    This mimics the behavior of Django for tests and demos
-    Philosophically, this is used by an application that uses an ORM,
-    or otherwise has its own connection management logic.
-    Dispatcher does not manage connections, so this a simulation of that.
-    """
-    if connection_save._connection is None:
-        config['autocommit'] = True
-        connection_save._connection = SyncBroker.create_connection(**config)
-    return connection_save._connection
 
 
 class SyncBroker(PGNotifyBase):
@@ -177,11 +158,49 @@ class SyncBroker(PGNotifyBase):
         channel = self.get_publish_channel(channel)
 
         with connection.cursor() as cur:
-            cur.execute('SELECT pg_notify(%s, %s);', (channel, message))
+            if message:
+                cur.execute('SELECT pg_notify(%s, %s);', (channel, message))
+            else:
+                cur.execute(f'NOTIFY {channel};')
 
-        logger.debug(f'Sent pg_notify message to {channel}')
+        logger.debug(f'Sent pg_notify message of {len(message)} chars to {channel}')
 
     def close(self) -> None:
         if self._connection:
             self._connection.close()
             self._connection = None
+
+
+class ConnectionSaver:
+    def __init__(self) -> None:
+        self._connection: Optional[psycopg.Connection] = None
+        self._async_connection: Optional[psycopg.AsyncConnection] = None
+
+
+connection_save = ConnectionSaver()
+
+
+def connection_saver(**config) -> psycopg.Connection:
+    """
+    This mimics the behavior of Django for tests and demos
+    Philosophically, this is used by an application that uses an ORM,
+    or otherwise has its own connection management logic.
+    Dispatcher does not manage connections, so this a simulation of that.
+    """
+    if connection_save._connection is None:
+        config['autocommit'] = True
+        connection_save._connection = SyncBroker.create_connection(**config)
+    return connection_save._connection
+
+
+async def async_connection_saver(**config) -> psycopg.AsyncConnection:
+    """
+    This mimics the behavior of Django for tests and demos
+    Philosophically, this is used by an application that uses an ORM,
+    or otherwise has its own connection management logic.
+    Dispatcher does not manage connections, so this a simulation of that.
+    """
+    if connection_save._async_connection is None:
+        config['autocommit'] = True
+        connection_save._async_connection = await AsyncBroker.create_connection(**config)
+    return connection_save._async_connection

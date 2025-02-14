@@ -68,20 +68,24 @@ def get_sync_broker(broker_name, broker_config) -> BaseBroker:
     return broker_module.SyncBroker(**broker_config)
 
 
-def get_sync_publisher_from_settings(publish_broker: Optional[str] = None, settings: LazySettings = global_settings) -> BaseBroker:
+def _get_publisher_broker_name(publish_broker: Optional[str] = None, settings: LazySettings = global_settings) -> str:
     if publish_broker:
-        pass
+        return publish_broker
     elif len(settings.brokers) == 1:
-        publish_broker = list(settings.brokers.keys())[0]
+        return list(settings.brokers.keys())[0]
     elif 'default_broker' in settings.publish:
-        publish_broker = settings.publish['default_broker']
+        return settings.publish['default_broker']
     else:
         raise RuntimeError(f'Could not determine which broker to publish with between options {list(settings.brokers.keys())}')
 
-    return get_sync_broker(publish_broker, settings.brokers[publish_broker])
+
+def get_sync_publisher_from_settings(publish_broker: Optional[str] = None, settings: LazySettings = global_settings, **overrides) -> BaseBroker:
+    publish_broker = _get_publisher_broker_name(publish_broker=publish_broker, settings=settings)
+
+    return get_sync_broker(publish_broker, settings.brokers[publish_broker], **overrides)
 
 
-def get_async_publisher_from_settings(settings: LazySettings = global_settings, **overrides) -> BaseBroker:
+def get_async_publisher_from_settings(publish_broker: Optional[str] = None, settings: LazySettings = global_settings, **overrides) -> BaseBroker:
     """
     An asynchronous publisher is the ideal choice for submitting control-and-reply actions.
     This returns an asyncio broker of the default publisher type.
@@ -90,5 +94,5 @@ def get_async_publisher_from_settings(settings: LazySettings = global_settings, 
     For control-and-reply, this will contain only the reply_to channel, to not receive
     unrelated traffic.
     """
-    publish_broker = settings.publish['default_broker']
+    publish_broker = _get_publisher_broker_name(publish_broker=publish_broker, settings=settings)
     return get_async_broker(publish_broker, settings.brokers[publish_broker], **overrides)

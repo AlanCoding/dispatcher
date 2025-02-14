@@ -29,7 +29,7 @@ class ControlCallbacks:
     def _create_events(self):
         return SimpleNamespace(exit_event=asyncio.Event())
 
-    async def process_message(self, payload, broker=None, channel=None):
+    async def process_message(self, payload, producer=None, channel=None):
         self.received_replies.append(payload)
         if self.expected_replies and (len(self.received_replies) >= self.expected_replies):
             self.events.exit_event.set()
