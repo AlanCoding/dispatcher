@@ -13,7 +13,7 @@ from dispatcher.control import Control
 
 from dispatcher.brokers.pg_notify import SyncBroker, AsyncBroker
 from dispatcher.registry import DispatcherMethodRegistry
-from dispatcher.config import temporary_settings
+from dispatcher.config import temporary_settings, DispatcherSettings
 from dispatcher.factories import from_settings
 
 
@@ -70,20 +70,27 @@ def pg_dispatcher() -> DispatcherMain:
 
 
 @pytest.fixture
+def test_settings():
+    return DispatcherSettings(BASIC_CONFIG)
+
+
+@pytest.fixture
 def test_setup():
     with temporary_settings(BASIC_CONFIG):
         yield
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")
-async def apg_dispatcher(test_setup) -> AsyncIterator[DispatcherMain]:
+async def apg_dispatcher(test_settings) -> AsyncIterator[DispatcherMain]:
     dispatcher = None
     try:
-        dispatcher = from_settings()
+        dispatcher = from_settings(settings=test_settings)
 
         await dispatcher.connect_signals()
         await dispatcher.start_working()
         await dispatcher.wait_for_producers_ready()
+
+        assert dispatcher.pool.finished_count == 0  # sanity
 
         yield dispatcher
     finally:
@@ -102,12 +109,7 @@ async def pg_message(psycopg_conn) -> Callable:
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")
 async def pg_control(test_setup) -> AsyncIterator[Control]:
-    """This has to use a different connection from dispatcher itself
-
-    because psycopg will pool async connections, meaning that submission
-    for the control task would be blocked by the listening query of the dispatcher itself"""
-    async with aconnection_for_test() as conn:
-        yield Control(queue='test_channel')
+    yield Control(queue='test_channel')
 
 
 @pytest_asyncio.fixture(loop_scope="function", scope="function")

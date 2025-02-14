@@ -15,6 +15,14 @@ class DispatcherSettings:
         # self.callbacks: dict = config.get('callbacks', {})
         # self.options: dict = config.get('options', {})
 
+    def serialize(self):
+        return dict(
+            brokers=self.brokers,
+            producers=self.producers,
+            service=self.service,
+            publish=self.publish
+        )
+
 
 def settings_from_file(path: str) -> DispatcherSettings:
     with open(path, 'r') as f:

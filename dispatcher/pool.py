@@ -9,6 +9,7 @@ from typing import Iterator, Optional
 
 from dispatcher.utils import DuplicateBehavior, MessageAction
 from dispatcher.worker.task import work_loop
+from dispatcher.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class PoolWorker:
         self.worker_id = worker_id
         # TODO: rename message_queue to call_queue, because this is what cpython ProcessPoolExecutor calls them
         self.message_queue: multiprocessing.Queue = multiprocessing.Queue()
-        self.process = multiprocessing.Process(target=work_loop, args=(self.worker_id, self.message_queue, finished_queue))
+        self.process = multiprocessing.Process(target=work_loop, args=(settings.serialize(), self.worker_id, self.message_queue, finished_queue))
 
         # Info specific to the current task being ran
         self.current_task: Optional[dict] = None

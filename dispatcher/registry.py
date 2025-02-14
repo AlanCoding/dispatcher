@@ -7,6 +7,7 @@ from typing import Callable, Optional, Set, Tuple
 from uuid import uuid4
 
 from dispatcher.utils import MODULE_METHOD_DELIMITER, DispatcherCallable, resolve_callable
+from dispatcher.config import settings as global_settings, DispatcherSettings
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class DispatcherMethod:
 
         return body
 
-    def apply_async(self, args=None, kwargs=None, queue=None, uuid=None, **kw) -> Tuple[dict, str]:
+    def apply_async(self, args=None, kwargs=None, queue=None, uuid=None, settings: DispatcherSettings = global_settings, **kw) -> Tuple[dict, str]:
         queue = queue or self.submission_defaults.get('queue')
 
         if callable(queue):
@@ -89,7 +90,7 @@ class DispatcherMethod:
 
         from dispatcher.factories import get_sync_publisher_from_settings
 
-        broker = get_sync_publisher_from_settings()
+        broker = get_sync_publisher_from_settings(settings=settings)
 
         # TODO: exit if a setting is applied to disable publishing
 
