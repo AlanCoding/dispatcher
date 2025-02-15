@@ -1,4 +1,5 @@
 from multiprocessing import Queue
+import os
 
 import pytest
 
@@ -37,3 +38,35 @@ def test_pass_messages_via_process_manager(manager_cls):
     process.message_queue.put('msg1')
     msg = process_manager.finished_queue.get()
     assert msg == 'done value msg1'
+
+
+@pytest.mark.parametrize('manager_cls', [ProcessManager, ForkServerManager])
+def test_workers_have_different_pid(manager_cls):
+    process_manager = manager_cls()
+    processes = [process_manager.create_process((f'value{i}',), target=work_loop2) for i in range(2)]
+
+    for i in range(2):
+        process = processes[i]
+        process.start()
+        process.message_queue.put(f'msg{i}')
+
+    assert processes[0].pid != processes[1].pid  # title of test
+
+    msg1 = process_manager.finished_queue.get()
+    msg2 = process_manager.finished_queue.get()
+    assert set([msg1, msg2]) == set(['done value1 msg1', 'done value0 msg0'])
+
+
+
+def return_pid(in_q, out_q):
+    out_q.put(f'{os.getpid()}')
+
+
+@pytest.mark.parametrize('manager_cls', [ProcessManager, ForkServerManager])
+def test_pid_is_correct(manager_cls):
+    process_manager = manager_cls()
+    process = process_manager.create_process((), target=return_pid)
+    process.start()
+
+    msg = process_manager.finished_queue.get()
+    assert int(msg) == process.pid
