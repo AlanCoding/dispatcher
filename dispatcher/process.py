@@ -1,7 +1,7 @@
 import asyncio
 import multiprocessing
 from multiprocessing.context import BaseContext
-from typing import Callable, Iterable, Optional, Union, Sized
+from typing import Callable, Iterable, Optional, Sized, Union
 
 from dispatcher.worker.task import work_loop
 

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 from typing import Optional, Union
 
 from dispatcher.pool import WorkerPool
+from dispatcher.process import ForkServerManager
 from dispatcher.producers.base import BaseProducer
 from dispatcher.producers.brokered import BrokeredProducer
 from dispatcher.producers.scheduled import ScheduledProducer
 from dispatcher.utils import MODULE_METHOD_DELIMITER
-from dispatcher.process import ForkServerManager
 
 logger = logging.getLogger(__name__)
 
