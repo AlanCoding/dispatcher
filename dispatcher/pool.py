@@ -4,7 +4,7 @@ import time
 from asyncio import Task
 from typing import Iterator, Optional
 
-from dispatcher.process import ProcessManager, ProcessProxy
+from dispatcher.process import ForkServerManager, ProcessProxy
 from dispatcher.utils import DuplicateBehavior, MessageAction
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class WorkerPool:
         self.num_workers = num_workers
         self.workers: dict[int, PoolWorker] = {}
         self.next_worker_id = 0
-        self.process_manager = ProcessManager()
+        self.process_manager = ForkServerManager()
         self.queued_messages: list[dict] = []  # TODO: use deque, invent new kinds of logging anxiety
         self.read_results_task: Optional[Task] = None
         self.start_worker_task: Optional[Task] = None

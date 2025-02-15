@@ -1,6 +1,8 @@
 from multiprocessing import Queue
 
-from dispatcher.process import ProcessManager, ProcessProxy
+import pytest
+
+from dispatcher.process import ProcessManager, ForkServerManager, ProcessProxy
 
 
 def test_pass_messages_to_worker():
@@ -17,13 +19,19 @@ def test_pass_messages_to_worker():
     assert msg == 'done 1 2 3 start'
 
 
-def test_pass_messages_via_process_manager():
-    def work_loop(var, in_q, out_q):
-        has_read = in_q.get()
-        out_q.put(f'done {var} {has_read}')
+def work_loop2(var, in_q, out_q):
+    """
+    Due to the mechanics of forkserver, this can not be defined in local variables,
+    it has to be importable, but this _is_ importable from the test module.
+    """
+    has_read = in_q.get()
+    out_q.put(f'done {var} {has_read}')
 
-    process_manager = ProcessManager()
-    process = process_manager.create_process(('value',), target=work_loop)
+
+@pytest.mark.parametrize('manager_cls', [ProcessManager, ForkServerManager])
+def test_pass_messages_via_process_manager(manager_cls):
+    process_manager = manager_cls()
+    process = process_manager.create_process(('value',), target=work_loop2)
     process.start()
 
     process.message_queue.put('msg1')
