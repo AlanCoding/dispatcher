@@ -13,6 +13,7 @@ from dispatcher.brokers.pg_notify import Broker, create_connection, acreate_conn
 from dispatcher.registry import DispatcherMethodRegistry
 from dispatcher.config import DispatcherSettings
 from dispatcher.factories import from_settings, get_control_from_settings
+from dispatcher.process import ProcessManager, ForkServerManager
 
 
 # List of channels to listen on
@@ -73,12 +74,20 @@ def pg_dispatcher() -> DispatcherMain:
 def test_settings():
     return DispatcherSettings(BASIC_CONFIG)
 
-
-@pytest_asyncio.fixture(loop_scope="function", scope="function")
-async def apg_dispatcher(test_settings) -> AsyncIterator[DispatcherMain]:
+@pytest_asyncio.fixture(
+    loop_scope="function",
+    scope="function",
+    params=[ProcessManager, ForkServerManager],
+    ids=["fork", "forkserver"],
+)
+async def apg_dispatcher(request) -> AsyncIterator[DispatcherMain]:
     dispatcher = None
     try:
-        dispatcher = from_settings(settings=test_settings)
+        this_test_config = BASIC_CONFIG.copy()
+        this_test_config.setdefault('service', {})
+        this_test_config['service']['process_manager_cls'] = request.param
+        this_settings = DispatcherSettings(this_test_config)
+        dispatcher = from_settings(settings=this_settings)
 
         await dispatcher.connect_signals()
         await dispatcher.start_working()
