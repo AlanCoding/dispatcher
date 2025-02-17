@@ -6,7 +6,6 @@ from dispatcher.control import Control
 from dispatcher.brokers.pg_notify import get_connection
 
 
-@pytest.mark.asyncio
 @pytest.mark.benchmark(group="control")
 def test_alive_benchmark(benchmark, with_full_server, conn_config):
     control = Control('test_channel', config=conn_config)
@@ -19,7 +18,6 @@ def test_alive_benchmark(benchmark, with_full_server, conn_config):
         benchmark(alive_check)
 
 
-@pytest.mark.asyncio
 @pytest.mark.benchmark(group="control")
 @pytest.mark.parametrize('messages', [0, 3, 4, 5, 10, 100])
 def test_alive_benchmark_while_busy(benchmark, with_full_server, conn_config, messages):
