@@ -31,6 +31,7 @@ class PoolServer:
         dispatcher = DispatcherMain({"producers": {"brokers": {}}, "pool": {"max_workers": workers}})
         pool = dispatcher.pool
         await pool.start_working(dispatcher)
+        queue_out.put('ready')
 
         print('waiting for message to start test')
         loop = asyncio.get_event_loop()
@@ -85,6 +86,9 @@ class PoolServer:
     @contextlib.contextmanager
     def with_server(self, *args, **kwargs):
         process = self.start_server(*args, **kwargs)
+        msg = self.queue_out.get()
+        if msg != 'ready':
+            raise RuntimeError('never got ready message from subprocess')
         try:
             yield self
         finally:
@@ -128,6 +132,10 @@ class FullServer(PoolServer):
             {"producers": {"brokers": {"pg_notify": {"conninfo": CONNECTION_STRING}, "channels": CHANNELS}}, "pool": {"max_workers": workers}}
         )
         await dispatcher.start_working()
+        # Make sure the dispatcher is listening before starting the tests which will submit messages
+        for producer in dispatcher.producers:
+            await producer.events.ready_event.wait()
+        queue_out.put('ready')
 
         print('waiting for message to start test')
         loop = asyncio.get_event_loop()
