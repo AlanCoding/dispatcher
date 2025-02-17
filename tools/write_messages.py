@@ -17,11 +17,6 @@ sys.path.append(tools_dir)
 
 from test_methods import sleep_function, sleep_discard, task_has_timeout, hello_world_binder
 
-import os, sys
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from test_work.math import fibonacci
 
 # Database connection details
 CONNECTION_STRING = "dbname=dispatch_db user=dispatch password=dispatching host=localhost port=55777"
@@ -40,8 +35,6 @@ def main():
         # Send the notification
         publish_message(channel, message, config={'conninfo': CONNECTION_STRING})
         # await send_notification(channel, message)
-
-    fibonacci.apply_async(args=[29], config={'conninfo': CONNECTION_STRING})
 
     # send more than number of workers quickly
     print('')
