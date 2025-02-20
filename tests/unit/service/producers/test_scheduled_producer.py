@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from dispatcher.producers import ScheduledProducer
 
 
@@ -36,7 +38,5 @@ def test_scheduled_producer_with_options():
     })
 
     loop = asyncio.get_event_loop()
-    try:
+    with pytest.raises(ItWorked):
         loop.run_until_complete(run_schedules_for_a_while(producer))
-    except ItWorked:
-        pass
