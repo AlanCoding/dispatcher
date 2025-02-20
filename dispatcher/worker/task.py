@@ -9,7 +9,8 @@ import traceback
 from queue import Empty as QueueEmpty
 
 from dispatcher.config import setup
-from dispatcher.registry import registry as global_registry, DispatcherMethodRegistry
+from dispatcher.registry import DispatcherMethodRegistry
+from dispatcher.registry import registry as global_registry
 
 logger = logging.getLogger(__name__)
 
