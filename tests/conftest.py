@@ -9,7 +9,7 @@ import pytest_asyncio
 from dispatcher.main import DispatcherMain
 from dispatcher.control import Control
 
-from dispatcher.brokers.pg_notify import Broker, create_connection, acreate_connection
+from dispatcher.brokers.pg_notify import Broker, acreate_connection, connection_save
 from dispatcher.registry import DispatcherMethodRegistry
 from dispatcher.config import DispatcherSettings
 from dispatcher.factories import from_settings, get_control_from_settings
@@ -54,6 +54,21 @@ async def aconnection_for_test():
     finally:
         if conn:
             await conn.close()
+
+
+@pytest.fixture(autouse=True)
+def clear_connection():
+    """Always close connections between tests
+
+    Tests will do a lot of unthoughtful forking, and connections can not
+    be shared accross processes.
+    """
+    if connection_save._connection:
+        connection_save._connection.close()
+        connection_save._connection = None
+    if connection_save._async_connection:
+        connection_save._async_connection.close()
+        connection_save._async_connection = None
 
 
 @pytest.fixture

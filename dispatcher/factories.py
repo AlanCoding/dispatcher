@@ -2,7 +2,7 @@ import inspect
 from copy import deepcopy
 from typing import Iterable, Optional, Type, get_args, get_origin
 
-from dispatcher import producers
+from dispatcher import process, producers
 from dispatcher.brokers import get_broker
 from dispatcher.brokers.base import BaseBroker
 from dispatcher.config import LazySettings
@@ -10,7 +10,6 @@ from dispatcher.config import settings as global_settings
 from dispatcher.control import Control
 from dispatcher.main import DispatcherMain
 from dispatcher.pool import WorkerPool
-from dispatcher import process
 
 """
 Creates objects from settings,
