@@ -106,8 +106,10 @@ async def apg_dispatcher(request) -> AsyncIterator[DispatcherMain]:
         await dispatcher.connect_signals()
         await dispatcher.start_working()
         await dispatcher.wait_for_producers_ready()
+        await dispatcher.pool.events.workers_ready.wait()
 
         assert dispatcher.pool.finished_count == 0  # sanity
+        assert dispatcher.control_count == 0
 
         yield dispatcher
     finally:
