@@ -13,7 +13,6 @@ from dispatcher.brokers.pg_notify import Broker, create_connection, acreate_conn
 from dispatcher.registry import DispatcherMethodRegistry
 from dispatcher.config import DispatcherSettings
 from dispatcher.factories import from_settings, get_control_from_settings
-from dispatcher.process import ProcessManager, ForkServerManager
 
 
 # List of channels to listen on
@@ -77,7 +76,7 @@ def test_settings():
 @pytest_asyncio.fixture(
     loop_scope="function",
     scope="function",
-    params=[ProcessManager, ForkServerManager],
+    params=['ProcessManager', 'ForkServerManager'],
     ids=["fork", "forkserver"],
 )
 async def apg_dispatcher(request) -> AsyncIterator[DispatcherMain]:

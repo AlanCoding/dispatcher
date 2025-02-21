@@ -10,7 +10,7 @@ from dispatcher.config import settings as global_settings
 from dispatcher.control import Control
 from dispatcher.main import DispatcherMain
 from dispatcher.pool import WorkerPool
-from dispatcher.process import ProcessManager
+from dispatcher import process
 
 """
 Creates objects from settings,
@@ -21,10 +21,16 @@ which is to avoid import dependencies.
 # ---- Service objects ----
 
 
+def process_manager_from_settings(settings: LazySettings = global_settings):
+    cls_name = settings.service.get('process_manager_cls', 'ForkServer')
+    process_manager_cls = getattr(process, cls_name)
+    return process_manager_cls()
+
+
 def pool_from_settings(settings: LazySettings = global_settings):
     kwargs = settings.service.get('pool_kwargs', {}).copy()
     kwargs['settings'] = settings
-    kwargs['process_manager'] = ProcessManager()  # TODO: use process_manager_cls from settings
+    kwargs['process_manager'] = process_manager_from_settings(settings=settings)
     return WorkerPool(**kwargs)
 
 
