@@ -2,13 +2,14 @@ import asyncio
 import multiprocessing
 from multiprocessing.context import BaseContext
 from typing import Callable, Iterable, Optional, Sized, Union
+import janus
 
 from dispatcher.worker.task import work_loop
 
 
 class ProcessProxy:
-    def __init__(self, args: Iterable, finished_queue: multiprocessing.Queue, target: Callable = work_loop, ctx: BaseContext = multiprocessing) -> None:
-        self.message_queue: multiprocessing.Queue = ctx.Queue()
+    def __init__(self, args: Iterable, message_queue: multiprocessing.Queue, finished_queue: multiprocessing.Queue, target: Callable = work_loop, ctx: BaseContext = multiprocessing) -> None:
+        self.message_queue: multiprocessing.Queue = message_queue
         self._process = ctx.Process(target=target, args=tuple(args) + (self.message_queue, finished_queue))
 
     def start(self) -> None:
@@ -51,7 +52,7 @@ class ProcessManager:
         return self._loop
 
     def create_process(self, args: Iterable[int | str | dict], **kwargs) -> ProcessProxy:
-        return ProcessProxy(args, self.finished_queue, ctx=self.ctx, **kwargs)
+        return ProcessProxy(args, self.ctx.Queue(), self.finished_queue, ctx=self.ctx, **kwargs)
 
     async def read_finished(self) -> dict[str, Union[str, int]]:
         message = await self.get_event_loop().run_in_executor(None, self.finished_queue.get)
@@ -64,3 +65,23 @@ class ForkServerManager(ProcessManager):
     def __init__(self, preload_modules: Sized = ()):
         super().__init__()
         self.ctx.set_forkserver_preload(preload_modules)
+
+
+class ForkServerJanusManager(ForkServerManager):
+    def __init__(self, preload_modules: Sized = ()):
+        self.ctx = multiprocessing.get_context(self.mp_context)
+        self.ctx.set_forkserver_preload(preload_modules)
+        self._finished_queue: Optional[janus.Queue] = None
+        self._loop = None
+
+    @property
+    def finished_queue(self):
+        "Implemented as a property because class is initialized in non-async code so we delay creation of the queue"
+        if not self._finished_queue:
+            self._shared_finished_queue = janus.Queue()
+            self._finished_queue = self._shared_finished_queue.sync_q
+        return self._finished_queue
+
+    async def read_finished(self) -> dict[str, Union[str, int]]:
+        message = await self.finished_queue.get()
+        return message

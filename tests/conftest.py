@@ -91,8 +91,8 @@ def test_settings():
 @pytest_asyncio.fixture(
     loop_scope="function",
     scope="function",
-    params=['ProcessManager', 'ForkServerManager'],
-    ids=["fork", "forkserver"],
+    params=['ProcessManager', 'ForkServerManager', 'ForkServerJanusManager'],
+    ids=["fork", "forkserver", "janus"],
 )
 async def apg_dispatcher(request) -> AsyncIterator[DispatcherMain]:
     dispatcher = None
