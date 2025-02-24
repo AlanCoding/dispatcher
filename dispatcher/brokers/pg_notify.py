@@ -1,6 +1,9 @@
 import logging
 import select
 from typing import Any, AsyncGenerator, Callable, Coroutine, Generator, Iterator, Optional, Union
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from multiprocessing import Queue
+import time
 
 import psycopg
 
@@ -189,15 +192,9 @@ class Broker:
             return connection
         return self._sync_connection
 
-    def process_notify(self, connected_callback: Optional[Callable] = None, timeout: float = 5.0, max_messages: int = 1) -> Iterator[tuple[str, str]]:
-        """Blocking method that listens for messages on subscribed pg_notify channels until timeout
-
-        This has two different exit conditions:
-        - received max_messages number of messages or more
-        - taken longer than the specified timeout condition
-        """
+    def process_notify_forever(self, queue: Queue, connected_callback: Optional[Callable] = None, max_messages: int = 1) -> None:
+        "Blocking method that listens for messages on subscribed pg_notify channels forever or until max_messages received, writes to queue"
         connection = self.get_connection()
-        msg_ct: int = 0
 
         with connection.cursor() as cur:
             for channel in self.channels:
@@ -208,18 +205,42 @@ class Broker:
                 connected_callback()
 
             logger.debug('Starting listening for pg_notify notifications')
+            msg_ct = 0
             while True:
-                if select.select([connection], [], [], timeout) == ([], [], []):
-                    logger.debug(f'Did not get {max_messages} messages in {timeout} seconds from channels: {self.channels}')
-                    break
-                else:
-                    notification_generator = current_notifies(connection)
-                    for notify in notification_generator:
-                        msg_ct += 1
-                        yield notify.channel, notify.payload
+                # select.select([connection], [], [])
 
-                    if msg_ct >= max_messages:
-                        break
+                while connection.notifies():
+                    notify = connection.notifies().pop(0)
+                    queue.put((notify.channel, notify.payload))
+                    msg_ct += 1
+
+                if msg_ct >= max_messages:
+                    break
+
+    def process_notify(self, connected_callback: Optional[Callable] = None, timeout: float = 5.0, max_messages: int = 1) -> list[tuple[str, str]]:
+        """Blocking method that listens for messages on subscribed pg_notify channels forever
+
+        This has two different exit conditions:
+        - received max_messages number of messages or more
+        - taken longer than the specified timeout condition
+        """
+        queue = Queue()
+        messages = []
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            listen_fut = pool.submit(self.process_notify_forever, queue, connected_callback, max_messages)
+            sleep_fut = pool.submit(lambda: time.sleep(timeout))
+
+            _, to_cancel = wait([listen_fut, sleep_fut], return_when=FIRST_COMPLETED)
+
+            print('canceling threads')
+            for fut in to_cancel:
+                fut.cancel()
+
+            while not queue.empty():
+                messages.append(queue.get())
+        return messages
+
 
     def publish_message(self, channel: Optional[str] = None, message: str = '') -> None:
         connection = self.get_connection()
