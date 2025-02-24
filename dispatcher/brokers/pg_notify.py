@@ -1,8 +1,6 @@
 import logging
 import select
-import os
-import signal
-from typing import AsyncGenerator, Callable, Optional, Union, Iterator, Generator
+from typing import AsyncGenerator, Callable, Generator, Iterator, Optional, Union
 
 import psycopg
 
@@ -31,7 +29,7 @@ def create_connection(**config) -> psycopg.Connection:
 def current_notifies(conn: psycopg.Connection) -> Generator[psycopg.connection.Notify, None, None]:
     """Altered version of .notifies method from psycopg library
 
-    Taken from AWX
+    Taken from AWX, only used for synchronous listening, same notify-or-timeout problem
     This removes the outer while True loop so that we only process
     queued notifications
     """
@@ -208,8 +206,7 @@ class Broker:
 
             logger.debug('Starting listening for pg_notify notifications')
             while True:
-                select_data = select.select([connection], [], [], timeout)
-                if select_data == ([], [], []):
+                if select.select([connection], [], [], timeout) == ([], [], []):
                     logger.debug(f'Did not get {max_messages} messages in {timeout} seconds from channels: {self.channels}')
                     break
                 else:
@@ -220,7 +217,6 @@ class Broker:
 
                     if msg_ct >= max_messages:
                         break
-
 
     def publish_message(self, channel: Optional[str] = None, message: str = '') -> None:
         connection = self.get_connection()
