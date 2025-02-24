@@ -207,7 +207,7 @@ class Broker:
             logger.debug('Starting listening for pg_notify notifications')
             msg_ct = 0
             while True:
-                # select.select([connection], [], [])
+                select.select([connection], [], [])
 
                 while connection.notifies():
                     notify = connection.notifies().pop(0)
