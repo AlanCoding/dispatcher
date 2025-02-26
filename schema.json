@@ -18,8 +18,8 @@
     "pool_kwargs": {
       "min_workers": "<class 'int'>",
       "max_workers": "<class 'int'>",
-      "scaledown_wait": "<class 'int'>",
-      "scaledown_interval": "<class 'int'>"
+      "scaledown_wait": "<class 'float'>",
+      "scaledown_interval": "<class 'float'>"
     }
   },
   "publish": {

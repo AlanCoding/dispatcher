@@ -122,8 +122,8 @@ class WorkerPool:
         process_manager: ProcessManager,
         min_workers: int = 1,
         max_workers: int = 4,
-        scaledown_wait: int = 15,
-        scaledown_interval: int = 15,
+        scaledown_wait: float = 15,
+        scaledown_interval: float = 15,
         settings: LazySettings = global_settings,
     ):
         self.min_workers = min_workers
