@@ -16,7 +16,10 @@
   },
   "service": {
     "pool_kwargs": {
-      "max_workers": "<class 'int'>"
+      "min_workers": "<class 'int'>",
+      "max_workers": "<class 'int'>",
+      "scaledown_wait": "<class 'int'>",
+      "scaledown_interval": "<class 'int'>"
     }
   },
   "publish": {
