@@ -180,7 +180,7 @@ class WorkerPool:
         return ct
 
     def should_scale_down(self):
-        worker_ct = len([worker for worker in self.workers.values() if worker.status == 'ready'])
+        worker_ct = len([worker for worker in self.workers.values() if worker.counts_for_capacity])
         if self.last_used_by_ct.get(worker_ct):
             delta = time.monotonic() - self.last_used_by_ct[worker_ct]
             # Criteria - last time we used this-many workers was greater than the setting
@@ -223,7 +223,9 @@ class WorkerPool:
                     # Starting the worker may have freed capacity for queued work
                     await self.drain_queue()
 
-                if worker.status == 'exited' or (worker.status == 'stopping' and worker.stopping_at and (time.monotonic() - worker.stopping_at) > 30.0):
+                if worker.status == 'exited':
+                    await worker.stop()  # happy path
+                elif worker.status == 'stopping' and worker.stopping_at and (time.monotonic() - worker.stopping_at) > 30.0:
                     logger.warning(f'Worker id={worker.worker_id} failed to respond to stop signal')
                     await worker.stop()  # agressively bring down process
 
