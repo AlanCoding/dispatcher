@@ -27,7 +27,7 @@ class InvalidMethod(DispatcherError):
 
 class DispatcherMethod:
 
-    def __init__(self, fn: DispatcherCallable, queue: Optional[Union[Callable,str]] = None, bind: bool = False, **submission_defaults) -> None:
+    def __init__(self, fn: DispatcherCallable, queue: Optional[Union[Callable, str]] = None, bind: bool = False, **submission_defaults) -> None:
         if not hasattr(fn, '__qualname__'):
             raise InvalidMethod('Can only register methods and classes')
         self.fn = fn
