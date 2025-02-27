@@ -47,6 +47,14 @@ async def test_run_decorated_function(apg_dispatcher, test_settings):
     await asyncio.wait_for(clearing_task, timeout=3)
     assert apg_dispatcher.pool.finished_count == 2
 
+    # piggyback again to test class method with callable queue
+    apg_dispatcher.pool.events.work_cleared.clear()
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
+    with temporary_settings(test_settings.serialize()):
+        test_methods.RunJob.delay()
+    await asyncio.wait_for(clearing_task, timeout=3)
+    assert apg_dispatcher.pool.finished_count == 3
+
 
 @pytest.mark.asyncio
 async def test_submit_with_global_settings(apg_dispatcher, test_settings):

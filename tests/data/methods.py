@@ -46,3 +46,9 @@ def get_queue_name():
 @task(queue=get_queue_name)
 def use_callable_queue():
     print('sucessful run using callable queue')
+
+
+@task(queue=get_queue_name)
+class RunJob:
+    def run(self):
+        print('successful run using callable queue with class')
