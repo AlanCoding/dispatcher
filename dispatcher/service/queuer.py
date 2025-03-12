@@ -2,11 +2,12 @@ import logging
 from typing import Iterable, Iterator, Optional
 
 from ..protocols import PoolWorker
+from ..protocols import Queuer as QueuerProtocol
 
 logger = logging.getLogger(__name__)
 
 
-class Queuer:
+class Queuer(QueuerProtocol):
     def __init__(self, workers: Iterable[PoolWorker]) -> None:
         self.queued_messages: list[dict] = []  # TODO: use deque, customizability
         self.workers = workers

@@ -1,13 +1,14 @@
 import logging
 from typing import Iterable, Iterator, Optional
 
+from ..protocols import Blocker as BlockerProtocol
 from ..utils import DuplicateBehavior
 from .queuer import Queuer
 
 logger = logging.getLogger(__name__)
 
 
-class Blocker:
+class Blocker(BlockerProtocol):
     def __init__(self, queuer: Queuer) -> None:
         self.blocked_messages: list[dict] = []  # TODO: use deque, customizability
         self.queuer = queuer

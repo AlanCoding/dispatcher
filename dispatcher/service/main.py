@@ -6,6 +6,7 @@ import time
 from typing import Iterable, Optional, Union
 from uuid import uuid4
 
+from ..protocols import DispatcherMain as DispatcherMainProtocol
 from ..protocols import Producer, WorkerPool
 from . import control_tasks
 from .asyncio_tasks import ensure_fatal
@@ -36,7 +37,7 @@ class DelayCapsule(HasWakeup):
         return self.received_at + self.delay
 
 
-class DispatcherMain:
+class DispatcherMain(DispatcherMainProtocol):
     def __init__(self, producers: Iterable[Producer], pool: WorkerPool, node_id: Optional[str] = None):
         self.delayed_messages: set[DelayCapsule] = set()
         self.received_count = 0
