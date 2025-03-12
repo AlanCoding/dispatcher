@@ -24,13 +24,17 @@ class BrokerCallbacks:
         await self.broker.apublish_message(self.queuename, self.send_message)
 
     async def listen_for_replies(self) -> None:
+        """Listen to the reply channel until we get the expected number of messages
+
+        This gets ran in a task, and timing out will be accomplished by the main code
+        """
         async for channel, payload in self.broker.aprocess_notify(connected_callback=self.connected_callback):
             self.received_replies.append(payload)
             if len(self.received_replies) >= self.expected_replies:
                 return
 
 
-class Control(object):
+class Control:
     def __init__(self, broker_name: str, broker_config: dict, queue: Optional[str] = None) -> None:
         self.queuename = queue
         self.broker_name = broker_name
