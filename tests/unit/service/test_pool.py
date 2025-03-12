@@ -85,7 +85,7 @@ async def test_scale_down_condition(test_settings):
     for i in range(3):
         await pool.scale_workers()
     assert len(pool.workers) == 3
-    for worker in pool.workers.values():
+    for worker in pool.workers:
         worker.status = 'ready'  # a lie, for test
         worker.current_task = None
     assert set([worker.status for worker in pool.workers]) == {'ready'}
