@@ -169,6 +169,9 @@ class WorkerData(WorkerDataProtocol):
     def __contains__(self, worker_id: int) -> bool:
         return worker_id in self.workers
 
+    def __len__(self) -> int:
+        return len(self.workers)
+
     def add_worker(self, worker: PoolWorker) -> None:
         self.workers[worker.worker_id] = worker
 
