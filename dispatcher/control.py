@@ -13,11 +13,11 @@ logger = logging.getLogger('awx.main.dispatch.control')
 
 
 class BrokerCallbacks:
-    def __init__(self, queuename: Optional[str], broker: Broker, send_data: dict, expected_replies: int = 1) -> None:
+    def __init__(self, queuename: Optional[str], broker: Broker, send_message: str, expected_replies: int = 1) -> None:
         self.received_replies: list = []
         self.queuename = queuename
         self.broker = broker
-        self.send_message = json.dumps(send_data)
+        self.send_message = send_message
         self.expected_replies = expected_replies
 
     async def connected_callback(self) -> None:
@@ -50,21 +50,20 @@ class Control(object):
                 ret.append(json.loads(payload))
         return ret
 
-    def make_broker(self, reply_queue: Optional[str] = None) -> Broker:
-        if reply_queue:
-            channels = [reply_queue]
-        else:
-            channels = []
-        return get_broker(self.broker_name, self.broker_config, channels=channels)
+    def get_send_message(self, command: str, reply_to: Optional[str] = None, send_data: Optional[dict] = None) -> str:
+        to_send: dict[str, Union[dict, str]] = {'control': command}
+        if reply_to:
+            to_send['reply_to'] = reply_to
+        if send_data:
+            to_send['control_data'] = send_data
+        return json.dumps(to_send)
 
     async def acontrol_with_reply(self, command: str, expected_replies: int = 1, timeout: int = 1, data: Optional[dict] = None) -> list[dict]:
         reply_queue = Control.generate_reply_queue_name()
-        send_data: dict[str, Union[dict, str]] = {'control': command, 'reply_to': reply_queue}
-        if data:
-            send_data['control_data'] = data
+        broker = get_broker(self.broker_name, self.broker_config, channels=[reply_queue])
+        send_message = self.get_send_message(command=command, reply_to=reply_queue, send_data=data)
 
-        broker = self.make_broker(reply_queue)
-        control_callbacks = BrokerCallbacks(broker=broker, queuename=self.queuename, send_data=send_data, expected_replies=expected_replies)
+        control_callbacks = BrokerCallbacks(broker=broker, queuename=self.queuename, send_message=send_message, expected_replies=expected_replies)
 
         listen_task = asyncio.create_task(control_callbacks.listen_for_replies())
         ensure_fatal(listen_task)
@@ -78,30 +77,20 @@ class Control(object):
         return self.parse_replies(control_callbacks.received_replies)
 
     async def acontrol(self, command: str, data: Optional[dict] = None) -> None:
-        send_data: dict[str, Union[dict, str]] = {'control': command}
-        if data:
-            send_data['control_data'] = data
-
-        broker = self.make_broker()
-        send_message = json.dumps(send_data)
+        broker = get_broker(self.broker_name, self.broker_config, channels=[])
+        send_message = self.get_send_message(command=command, send_data=data)
         await broker.apublish_message(message=send_message)
 
     def control_with_reply(self, command: str, expected_replies: int = 1, timeout: float = 1.0, data: Optional[dict] = None) -> list[dict]:
         logger.info('control-and-reply {} to {}'.format(command, self.queuename))
         start = time.time()
         reply_queue = Control.generate_reply_queue_name()
-        send_data: dict[str, Union[dict, str]] = {'control': command, 'reply_to': reply_queue}
-        if data:
-            send_data['control_data'] = data
+        send_message = self.get_send_message(command=command, reply_to=reply_queue, send_data=data)
 
         broker = get_broker(self.broker_name, self.broker_config, channels=[reply_queue])
 
         def connected_callback() -> None:
-            payload = json.dumps(send_data)
-            if self.queuename:
-                broker.publish_message(channel=self.queuename, message=payload)
-            else:
-                broker.publish_message(message=payload)
+            broker.publish_message(channel=self.queuename, message=send_message)
 
         replies = []
         for channel, payload in broker.process_notify(connected_callback=connected_callback, max_messages=expected_replies, timeout=timeout):
@@ -113,10 +102,6 @@ class Control(object):
 
     def control(self, command: str, data: Optional[dict] = None) -> None:
         "Send message in fire-and-forget mode, as synchronous code. Only for no-reply control."
-        send_data: dict[str, Union[dict, str]] = {'control': command}
-        if data:
-            send_data['control_data'] = data
-
-        payload = json.dumps(send_data)
         broker = get_broker(self.broker_name, self.broker_config)
-        broker.publish_message(channel=self.queuename, message=payload)
+        send_message = self.get_send_message(command=command, send_data=data)
+        broker.publish_message(channel=self.queuename, message=send_message)
