@@ -460,14 +460,16 @@ class WorkerPool(WorkerPoolProtocol):
 
     async def dispatch_task(self, message: dict) -> None:
         uuid = message.get("uuid", "<unknown>")
-        async with self.workers.management_lock:
-            if unblocked_task := self.blocker.process_task(message):
-                if worker := self.queuer.get_worker_or_process_task(unblocked_task):
-                    logger.debug(f"Dispatching task (uuid={uuid}) to worker (id={worker.worker_id})")
+        unblocked_task = self.blocker.process_task(message)
+        if unblocked_task:
+            worker = self.queuer.get_worker_or_process_task(unblocked_task)
+            if worker:
+                logger.debug(f"Dispatching task (uuid={uuid}) to worker (id={worker.worker_id})")
+                async with self.workers.management_lock:
                     await worker.start_task(unblocked_task)
                     await self.post_task_start(unblocked_task)
-                else:
-                    self.events.management_event.set()  # kick manager task to start auto-scale up
+            else:
+                self.events.management_event.set()  # kick manager task to start auto-scale up if needed
 
     async def drain_queue(self) -> None:
         async with self.workers.management_lock:
