@@ -96,7 +96,7 @@ class Control:
             await broker.aclose()
 
     def control_with_reply(self, command: str, expected_replies: int = 1, timeout: float = 1.0, data: Optional[dict] = None) -> list[dict]:
-        logger.info('control-and-reply {} to {}'.format(command, self.queuename))
+        logger.info(f'control-and-reply {command} to {self.queuename}')
         start = time.time()
         reply_queue = Control.generate_reply_queue_name()
         send_message = self.create_message(command=command, reply_to=reply_queue, send_data=data)
