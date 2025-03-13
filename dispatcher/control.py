@@ -82,13 +82,18 @@ class Control:
         except asyncio.TimeoutError:
             logger.warning(f'Did not receive {expected_replies} reply in {timeout} seconds, only {len(control_callbacks.received_replies)}')
             listen_task.cancel()
+        finally:
+            await broker.aclose()
 
         return self.parse_replies(control_callbacks.received_replies)
 
     async def acontrol(self, command: str, data: Optional[dict] = None) -> None:
         broker = get_broker(self.broker_name, self.broker_config, channels=[])
         send_message = self.create_message(command=command, send_data=data)
-        await broker.apublish_message(message=send_message)
+        try:
+            await broker.apublish_message(message=send_message)
+        finally:
+            await broker.aclose()
 
     def control_with_reply(self, command: str, expected_replies: int = 1, timeout: float = 1.0, data: Optional[dict] = None) -> list[dict]:
         logger.info('control-and-reply {} to {}'.format(command, self.queuename))
@@ -102,15 +107,20 @@ class Control:
             broker.publish_message(channel=self.queuename, message=send_message)
 
         replies = []
-        for channel, payload in broker.process_notify(connected_callback=connected_callback, max_messages=expected_replies, timeout=timeout):
-            reply_data = json.loads(payload)
-            replies.append(reply_data)
-
-        logger.info(f'control-and-reply message returned in {time.time() - start} seconds')
-        return replies
+        try:
+            for channel, payload in broker.process_notify(connected_callback=connected_callback, max_messages=expected_replies, timeout=timeout):
+                reply_data = json.loads(payload)
+                replies.append(reply_data)
+            logger.info(f'control-and-reply message returned in {time.time() - start} seconds')
+            return replies
+        finally:
+            broker.close()
 
     def control(self, command: str, data: Optional[dict] = None) -> None:
-        "Send message in fire-and-forget mode, as synchronous code. Only for no-reply control."
+        """Send a fire-and-forget control message synchronously."""
         broker = get_broker(self.broker_name, self.broker_config)
         send_message = self.create_message(command=command, send_data=data)
-        broker.publish_message(channel=self.queuename, message=send_message)
+        try:
+            broker.publish_message(channel=self.queuename, message=send_message)
+        finally:
+            broker.close()
