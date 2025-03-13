@@ -24,12 +24,17 @@ class BrokerCallbacks:
         await self.broker.apublish_message(self.queuename, self.send_message)
 
     async def listen_for_replies(self) -> None:
-        """Listen to the reply channel until we get the expected number of messages
+        """Listen to the reply channel until we get the expected number of messages.
 
-        This gets ran in a task, and timing out will be accomplished by the main code
+        This gets ran in an async task, and timing out will be accomplished by the main code
         """
         async for channel, payload in self.broker.aprocess_notify(connected_callback=self.connected_callback):
-            self.received_replies.append(payload)
+            try:
+                # If payload is a string, parse it to a dict; otherwise assume it's valid.
+                message = json.loads(payload) if isinstance(payload, str) else payload
+                self.received_replies.append(message)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Invalid JSON on channel '{channel}': {payload[:100]}... (Error: {e})")
             if len(self.received_replies) >= self.expected_replies:
                 return
 
