@@ -1,9 +1,10 @@
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from .registry import DispatcherMethodRegistry
 from .registry import registry as default_registry
 from .utils import DispatcherCallable
+from .protocols import TaskCallable
 
 logger = logging.getLogger('awx.main.dispatch')
 
@@ -24,7 +25,7 @@ class DispatcherDecorator:
         self.on_duplicate = on_duplicate
         self.timeout = timeout
 
-    def __call__(self, fn: DispatcherCallable, /) -> DispatcherCallable:
+    def __call__(self, fn: DispatcherCallable, /) -> TaskCallable:
         "Concrete task decorator, registers method and glues on some methods from the registry"
 
         dmethod = self.registry.register(fn, bind=self.bind, queue=self.queue, on_duplicate=self.on_duplicate, timeout=self.timeout)
@@ -32,7 +33,9 @@ class DispatcherDecorator:
         setattr(fn, 'apply_async', dmethod.apply_async)
         setattr(fn, 'delay', dmethod.delay)
 
-        return fn
+        decorated_fn = cast(TaskCallable, fn)
+
+        return decorated_fn
 
 
 def task(

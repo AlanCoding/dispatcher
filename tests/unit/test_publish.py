@@ -1,4 +1,5 @@
 from unittest import mock
+from typing import get_type_hints
 
 from dispatcher.publish import task
 
@@ -75,3 +76,18 @@ def test_class_normal_call(registry, mock_apply_async):
     TestMethod.delay()
 
     mock_apply_async.assert_called_once_with((), {})
+
+
+def test_type_hinting_on_decorated_methods(registry):
+    def hello(world: object) -> str:
+        return f'hello {world}'
+
+    decorated_hello = task(registry=registry)(hello)
+
+    for method in (hello, decorated_hello):
+        hints = get_type_hints(method)
+        assert hints.get('world') == object
+        assert hints.get('return') == str
+
+    hints = get_type_hints(decorated_hello)
+    assert hints.get('apply_async'), hints

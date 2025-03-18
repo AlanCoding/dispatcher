@@ -41,6 +41,12 @@ class Broker(Protocol):
         ...
 
 
+class TaskCallable(Protocol):
+    def apply_async(self, args: Iterable = (), kwargs: dict | None = None) -> None: ...
+
+    def delay(self, *args, **kwargs) -> None: ...
+
+
 class ProducerEvents(Protocol):
     """
     Describes an events container for producers.
