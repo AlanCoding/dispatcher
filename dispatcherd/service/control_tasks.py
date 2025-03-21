@@ -110,7 +110,7 @@ async def producers(dispatcher: DispatcherMain, data: dict) -> dict:
     """Information about the enabled task producers"""
     ret = {}
     for producer in dispatcher.producers:
-        ret[type(producer).__name__] = producer.get_status_data()
+        ret[str(producer)] = producer.get_status_data()
     return ret
 
 
