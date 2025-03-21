@@ -151,6 +151,10 @@ class WorkerPool(Protocol):
     queuer: Queuer
     blocker: Blocker
 
+    next_worker_id: int
+    finished_count: int
+    canceled_count: int
+
     async def start_working(self, forking_lock: asyncio.Lock, exit_event: Optional[asyncio.Event] = None) -> None:
         """Start persistent asyncio tasks, including asychronously starting worker subprocesses"""
         ...
@@ -174,6 +178,9 @@ class DispatcherMain(Protocol):
     pool: WorkerPool
     delayed_messages: set
     producers: Iterable[Producer]
+
+    received_count: int
+    control_count: int
 
     async def main(self) -> None:
         """This is the method that runs the service, bring your own event loop"""

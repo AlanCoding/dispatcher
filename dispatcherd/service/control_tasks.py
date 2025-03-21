@@ -4,7 +4,7 @@ import logging
 
 from ..protocols import DispatcherMain
 
-__all__ = ['running', 'cancel', 'alive', 'aio_tasks', 'workers', 'producers', 'status']
+__all__ = ['running', 'cancel', 'alive', 'aio_tasks', 'workers', 'producers', 'main', 'status']
 
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,19 @@ async def run(dispatcher: DispatcherMain, data: dict) -> dict:
                 return {'error': str(exc)}
             return {'ack': data}
     return {'error': 'A ControlBroker producer is not enabled. Add it to the list of producers in the service config to use this.'}
+
+
+async def main(dispatcher: DispatcherMain, data: dict) -> dict:
+    """Information about scalar quantities on the main or pool objects"""
+    return {
+        "received_count": dispatcher.received_count,
+        "control_count": dispatcher.control_count,
+        "pool": {
+            "next_worker_id": dispatcher.pool.next_worker_id,
+            "finished_count": dispatcher.pool.finished_count,
+            "canceled_count": dispatcher.pool.canceled_count,
+        },
+    }
 
 
 async def status(dispatcher: DispatcherMain, data: dict) -> dict:
