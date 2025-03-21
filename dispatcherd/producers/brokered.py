@@ -15,7 +15,7 @@ class BrokeredProducer(BaseProducer):
         self.dispatcher: Optional[DispatcherMain] = None
         super().__init__()
 
-    def __str__(self):
+    def __str__(self) -> str:
         broker_module = self.broker.__module__.rsplit('.', 1)[-1]
         return f'{broker_module}-producer'
 
