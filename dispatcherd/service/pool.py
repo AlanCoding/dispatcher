@@ -117,7 +117,7 @@ class PoolWorker(HasWakeup, PoolWorkerProtocol):
             return  # it's effectively already canceled/not running
         os.kill(self.process.pid, signal.SIGUSR1)  # Use SIGUSR1 instead of SIGTERM
 
-    def get_data(self) -> dict[str, Any]:
+    def get_status_data(self) -> dict[str, Any]:
         return {
             'worker_id': self.worker_id,
             'pid': self.process.pid,
