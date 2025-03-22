@@ -135,15 +135,9 @@ async def run(dispatcher: DispatcherMain, data: dict) -> dict:
 
 async def main(dispatcher: DispatcherMain, data: dict) -> dict:
     """Information about scalar quantities on the main or pool objects"""
-    return {
-        "received_count": dispatcher.received_count,
-        "control_count": dispatcher.control_count,
-        "pool": {
-            "next_worker_id": dispatcher.pool.next_worker_id,
-            "finished_count": dispatcher.pool.finished_count,
-            "canceled_count": dispatcher.pool.canceled_count,
-        },
-    }
+    ret = dispatcher.get_status_data()
+    ret["pool"] = dispatcher.pool.get_status_data()
+    return ret
 
 
 async def status(dispatcher: DispatcherMain, data: dict) -> dict:

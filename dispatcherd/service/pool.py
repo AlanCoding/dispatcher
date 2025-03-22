@@ -241,6 +241,13 @@ class WorkerPool(WorkerPoolProtocol):
     def received_count(self) -> int:
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
+    def get_status_data(self) -> dict[str, Any]:
+        return {
+            "next_worker_id": self.next_worker_id,
+            "finished_count": self.finished_count,
+            "canceled_count": self.canceled_count,
+        }
+
     async def start_working(self, forking_lock: asyncio.Lock, exit_event: Optional[asyncio.Event] = None) -> None:
         self.read_results_task = ensure_fatal(asyncio.create_task(self.read_results_forever(), name='results_task'), exit_event=exit_event)
         self.management_task = ensure_fatal(asyncio.create_task(self.manage_workers(forking_lock=forking_lock), name='management_task'), exit_event=exit_event)

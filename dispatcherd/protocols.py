@@ -151,16 +151,16 @@ class WorkerPool(Protocol):
     queuer: Queuer
     blocker: Blocker
 
-    next_worker_id: int
-    finished_count: int
-    canceled_count: int
-
     async def start_working(self, forking_lock: asyncio.Lock, exit_event: Optional[asyncio.Event] = None) -> None:
         """Start persistent asyncio tasks, including asychronously starting worker subprocesses"""
         ...
 
     async def dispatch_task(self, message: dict) -> None:
         """Called by DispatcherMain after in the normal task lifecycle, pool will try to hand the task to a worker"""
+        ...
+
+    def get_status_data(self) -> dict:
+        """Data for debugging commands"""
         ...
 
     async def shutdown(self) -> None: ...
@@ -179,9 +179,6 @@ class DispatcherMain(Protocol):
     delayed_messages: set
     producers: Iterable[Producer]
 
-    received_count: int
-    control_count: int
-
     async def main(self) -> None:
         """This is the method that runs the service, bring your own event loop"""
         ...
@@ -194,4 +191,8 @@ class DispatcherMain(Protocol):
         self, payload: Union[dict, str], producer: Optional[Producer] = None, channel: Optional[str] = None
     ) -> tuple[Optional[str], Optional[str]]:
         """This is called by producers when a new request to run a task comes in"""
+        ...
+
+    def get_status_data(self) -> dict:
+        """Data for debugging commands"""
         ...
