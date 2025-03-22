@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import time
+from os import getpid
 from typing import Any, Iterable, Optional, Union
 from uuid import uuid4
 
@@ -68,10 +69,7 @@ class DispatcherMain(DispatcherMainProtocol):
         self.events.exit_event.set()
 
     def get_status_data(self) -> dict[str, Any]:
-        return {
-            "received_count": self.received_count,
-            "control_count": self.control_count,
-        }
+        return {"received_count": self.received_count, "control_count": self.control_count, "pid": getpid()}
 
     async def wait_for_producers_ready(self) -> None:
         "Returns when all the producers have hit their ready event"
