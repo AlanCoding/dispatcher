@@ -7,6 +7,7 @@ import pytest
 
 from dispatcherd.config import temporary_settings
 from tests.data import methods as test_methods
+from tests.data import forking_methods
 
 SLEEP_METHOD = 'lambda: __import__("time").sleep(0.1)'
 
@@ -53,6 +54,20 @@ async def test_run_decorated_function(apg_dispatcher, test_settings):
         test_methods.RunJob.delay()
     await asyncio.wait_for(clearing_task, timeout=3)
     assert apg_dispatcher.pool.finished_count == 3
+
+
+@pytest.mark.parametrize('method_name', forking_methods.__all__)
+@pytest.mark.asyncio
+async def test_forking_methods(apg_dispatcher, registry, method_name, test_settings):
+    assert apg_dispatcher.pool.failed_count == 0
+
+    clearing_task = asyncio.create_task(apg_dispatcher.pool.events.work_cleared.wait())
+    method = getattr(forking_methods, method_name)
+    dmethod = registry.register(method)
+    dmethod.apply_async(settings=test_settings)
+    await asyncio.wait_for(clearing_task, timeout=3)
+    assert apg_dispatcher.pool.finished_count == 1
+    assert apg_dispatcher.pool.failed_count == 0
 
 
 @pytest.mark.asyncio

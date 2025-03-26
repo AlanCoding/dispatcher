@@ -209,6 +209,7 @@ class WorkerPool(WorkerPoolProtocol):
         self.next_worker_id = 0
         self.shutting_down = False
         self.finished_count: int = 0
+        self.failed_count: int = 0
         self.canceled_count: int = 0
         self.shutdown_timeout = 3
 
@@ -516,6 +517,9 @@ class WorkerPool(WorkerPoolProtocol):
                 msg += ', canceled'
             else:
                 msg += f", result: {result}"
+        if message.get("error"):
+            self.failed_count += 1  # for tests and stats
+            msg += ', failed'
         logger.debug(msg)
 
         running_ct = self.get_running_count()

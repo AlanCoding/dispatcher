@@ -179,16 +179,18 @@ class TaskWorker:
     def get_finished_message(self, raw_result, message, time_started):
         """I finished the task in message, giving result. This is what I send back to traffic control."""
         result = None
+        is_error = False
         if type(raw_result) in (type(None), list, dict, int, str):
             result = raw_result
         elif isinstance(raw_result, Exception):
-            pass  # already logged when task errors
+            is_error = True  # already logged when task errors
         else:
             logger.info(f'Discarding task (uuid={self.get_uuid(message)}) result of non-serializable type {type(raw_result)}')
 
         return {
             "worker": self.worker_id,
             "event": "done",
+            "error": is_error,
             "result": result,
             "uuid": self.get_uuid(message),
             "time_started": time_started,
