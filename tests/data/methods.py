@@ -93,6 +93,11 @@ def break_connection():
     print('sleeping for 0.2s > 0.1s session timeout')
     time.sleep(0.2)
 
+    broker = get_broker('pg_notify', settings.brokers['pg_notify'])
+    conn = broker.get_connection()
+
+    print(f'Connection reports closed {getattr(conn, "closed", "not_found")}')
+
     for i in range(1, 3):
         print(f'\nRunning query number {i}')
         try:
@@ -101,6 +106,8 @@ def break_connection():
                 print('  query worked, not expected')
         except Exception as exc:
             print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
+
+    print(f'Connection reports closed {getattr(conn, "closed", "not_found")}')
 
 
 def test_break_connection():
@@ -120,3 +127,4 @@ def do_database_query():
         cursor.execute("SELECT 1;")
         result = cursor.fetchone()
         logger.info(f"legitimate result of query: {result[0]}")  # prints: 1
+        print(f"legitimate result of query: {result[0]}")
