@@ -76,80 +76,22 @@ def schedules_another_task(binder):
 
 @task()
 def break_connection():
+    # Assumes dispatcherd is configured, get the psycopg synchronous connection
     broker = get_broker('pg_notify', settings.brokers['pg_notify'])
     conn = broker.get_connection()
+
     with conn.cursor() as cursor:
-        # idle_session_timeout
-        # cursor.execute(f"SET idle_in_transaction_session_timeout = '0.1s';")
-        # cursor.execute(f"SET idle_session_timeout = '0.1s';")
-        cursor.execute("SELECT 1;")
+        cursor.execute(f"SET idle_session_timeout = '0.1s';")
 
-
-    with conn.transaction():
-
-        with conn.cursor() as cursor:
-            print('Running immediate query with initial cursor')
-            try:
-                cursor.execute("SELECT 1;")
-                print('  query worked')
-            except Exception as exc:
-                print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
-
-            print('')
-            print('sleeping - inside cursor')
-            time.sleep(0.2)
-
-            print('')
-            print('')
-
-            for i in range(3):
-                print("Running another unrelated query with same cursor")
-                try:
-                    cursor.execute("SELECT 1;")
-                    print('  query worked')
-                except Exception as exc:
-                    print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
-
-
-        print('')
-        print("Running query outside transaction")
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT 1;")
-                print('  query worked')
-        except Exception as exc:
-            print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
-
-        print('')
-        print('')
-        print('sleeping - outside transaction')
-        time.sleep(0.2)
-
-        print('')
-
-        for i in range(3):
-            print("Running another unrelated query in same transaction")
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT 1;")  # Will timeout after 100ms
-                    print('  query worked')
-            except Exception as exc:
-                print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
-
-
-    print('')
-    print('')
-    print('sleeping - outside transaction')
+    print('sleeping for 0.2s > 0.1s session timeout')
     time.sleep(0.2)
 
-    print('')
-
-    for i in range(3):
-        print("Running unrelated query")
+    for i in range(1, 3):
+        print(f'\nRunning query number {i}')
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT 1;")  # Will timeout after 100ms
-                print('  query worked')
+                cursor.execute("SELECT 1;")
+                print('  query worked, not expected')
         except Exception as exc:
             print(f'  query errored as expected\ntype: {type(exc)}\nstr: {str(exc)}')
 
