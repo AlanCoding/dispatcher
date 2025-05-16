@@ -3,7 +3,6 @@ import logging
 import threading
 import time
 import uuid
-import re
 from typing import Any, AsyncGenerator, Callable, Coroutine, Iterator, Optional, Union
 
 import psycopg
