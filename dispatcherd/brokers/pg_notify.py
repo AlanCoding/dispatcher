@@ -52,11 +52,6 @@ def validate_channel_name(channel_name: str) -> None:
     if len(channel_name.encode('utf-8')) > 63:
         raise DispatcherdInvalidChannel(f'Channel name is too long chars={len(channel_name.encode("utf-8"))}')
 
-    # # Organic failure from postgres, from the LISTEN query
-    # # psycopg.errors.SyntaxError: syntax error at or near "-"
-    # if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', channel_name):
-    #     raise DispatcherdInvalidChannel("Channel name must start with a letter or underscore, and contain only letters, digits, or underscores.")
-
 
 class Broker(BrokerProtocol):
     NOTIFY_QUERY_TEMPLATE = 'SELECT pg_notify(%s, %s);'

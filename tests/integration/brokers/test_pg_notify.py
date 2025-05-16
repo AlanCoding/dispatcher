@@ -137,7 +137,6 @@ class TestChannelSanitization:
         """Sanity check that postgres itself will accept valid names for listening"""
         conn = psycopg.connect(**conn_config, autocommit=True)
         conn.execute(psycopg.sql.SQL("LISTEN {};").format(psycopg.sql.Identifier(channel_name)))
-        # conn.execute(f"LISTEN {channel_name}")
         conn.execute(Broker.NOTIFY_QUERY_TEMPLATE, (channel_name, 'foo'))
 
     @pytest.mark.parametrize('channel_name', BAD_CHANNEL_NAMES)
@@ -146,7 +145,6 @@ class TestChannelSanitization:
         conn = psycopg.connect(**conn_config, autocommit=True)
         with pytest.raises(psycopg.DatabaseError):
             conn.execute(psycopg.sql.SQL("LISTEN {};").format(psycopg.sql.Identifier(channel_name)))
-            # conn.execute(f"LISTEN {channel_name}")
             conn.execute(Broker.NOTIFY_QUERY_TEMPLATE, (channel_name, 'foo'))
 
     @pytest.mark.parametrize('channel_name', VALID_CHANNEL_NAMES)
@@ -166,7 +164,6 @@ class TestChannelSanitization:
             conn = psycopg.connect(**conn_config, autocommit=True)
             try:
                 conn.execute(psycopg.sql.SQL("LISTEN {};").format(psycopg.sql.Identifier(channel_name)))
-                # conn.execute(f"LISTEN {psycopg.sql.Identifier(channel_name)};")
                 conn.execute(Broker.NOTIFY_QUERY_TEMPLATE, (channel_name, 'this is a test message'))
             except Exception:
                 return False  # did not work
