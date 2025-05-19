@@ -121,9 +121,10 @@ VALID_CHANNEL_NAMES = [
 
 
 BAD_CHANNEL_NAMES = [
-    '🔥' * 22,  # under 64 but expanded unicode is over
+    'a' + '🔥' * 22,  # under 64 but expanded unicode is over
     'a' * 64,  # over the limit of 63
-    'a' * 120
+    'a' * 120,
+    ''
 ]
 
 
@@ -170,7 +171,7 @@ class TestChannelSanitization:
             gen = conn.notifies(timeout=0.001)
             try:
                 for notify in gen:
-                    print(notify)
+                    assert notify.payload == 'this is a test message'
                     gen.close()
                     return True
                 else:
