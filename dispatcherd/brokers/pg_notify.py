@@ -51,6 +51,9 @@ def validate_channel_name(channel_name: str) -> None:
     if len(channel_name.encode('utf-8')) > 63:
         raise DispatcherdInvalidChannel(f'Channel name is too long chars={len(channel_name.encode("utf-8"))}')
 
+    if not channel_name:
+        raise DispatcherdInvalidChannel(f'Received blank channel name {channel_name}. PG notify channel name can not be blank.')
+
 
 class Broker(BrokerProtocol):
     NOTIFY_QUERY_TEMPLATE = 'SELECT pg_notify(%s, %s);'
@@ -119,6 +122,10 @@ class Broker(BrokerProtocol):
         if self.self_check_channel not in server_channels:
             server_channels.append(self.self_check_channel)
         self.channels = server_channels
+
+        # Raise an early error if any of the channel names are invalid
+        for channel in self.channels:
+            validate_channel_name(channel)
 
         self.default_publish_channel = default_publish_channel
         self.self_check_status = BrokerSelfCheckStatus.IDLE
