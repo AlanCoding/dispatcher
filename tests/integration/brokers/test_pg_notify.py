@@ -128,11 +128,11 @@ BAD_CHANNEL_NAMES = [
 ]
 
 
-class TestChannelSanitization:
-    def test_valid_channel(self, conn_config):
-        broker = Broker(config=conn_config)
-        broker.publish_message(channel='foobar', message='foobar')
+class TestChannelSanitizationPostgresSanity:
+    """These do not test dispatcherd itself, but give a reference by testing psycopg and postgres
 
+    These tests validate that the valid and bad channel name lists are, in fact, bad and valid.
+    """
     @pytest.mark.parametrize('channel_name', VALID_CHANNEL_NAMES)
     def test_psycopg_valid_sanity_check(self, channel_name, conn_config):
         """Sanity check that postgres itself will accept valid names for listening"""
@@ -147,17 +147,6 @@ class TestChannelSanitization:
         with pytest.raises(psycopg.DatabaseError):
             conn.execute(psycopg.sql.SQL("LISTEN {};").format(psycopg.sql.Identifier(channel_name)))
             conn.execute(Broker.NOTIFY_QUERY_TEMPLATE, (channel_name, 'foo'))
-
-    @pytest.mark.parametrize('channel_name', VALID_CHANNEL_NAMES)
-    def test_valid_channel_publish(self, channel_name, conn_config):
-        broker = Broker(config=conn_config)
-        broker.publish_message(channel=channel_name, message='foobar')
-
-    @pytest.mark.parametrize('channel_name', BAD_CHANNEL_NAMES)
-    def test_invalid_channel_publish(self, channel_name, conn_config):
-        broker = Broker(config=conn_config)
-        with pytest.raises(psycopg.DatabaseError):
-            broker.publish_message(channel=channel_name, message='foobar')
 
     @pytest.fixture
     def can_receive_notification(self, conn_config):
@@ -187,3 +176,32 @@ class TestChannelSanitization:
     @pytest.mark.parametrize('channel_name', BAD_CHANNEL_NAMES)
     def test_can_not_receive_over_invalid_channels(self, can_receive_notification, channel_name):
         assert not can_receive_notification(channel_name)
+
+
+class TestChannelSanitizationPostgres:
+    """These tests verify that we do early validation
+
+    Specifically, this means that dispatcherd will not let you listen to a channel you can not send to
+    and that you can not send to a channel you can not listen to"""
+
+    @pytest.mark.parametrize('channel_name', VALID_CHANNEL_NAMES)
+    def test_valid_channel_publish(self, channel_name, conn_config):
+        broker = Broker(config=conn_config)
+        broker.publish_message(channel=channel_name, message='foobar')
+
+    @pytest.mark.parametrize('channel_name', BAD_CHANNEL_NAMES)
+    def test_invalid_channel_publish(self, channel_name, conn_config):
+        broker = Broker(config=conn_config)
+        with pytest.raises(psycopg.DatabaseError):
+            broker.publish_message(channel=channel_name, message='foobar')
+
+    @pytest.mark.parametrize('channel_name', VALID_CHANNEL_NAMES)
+    def test_valid_channel_listen(self, channel_name, conn_config):
+        broker = Broker(config=conn_config, channels=[channel_name])
+        broker.process_notify(max_messages=0)
+
+    @pytest.mark.parametrize('channel_name', BAD_CHANNEL_NAMES)
+    def test_invalid_channel_listen(self, channel_name, conn_config):
+        with pytest.raises(psycopg.DatabaseError):
+            broker = Broker(config=conn_config, channels=[channel_name])
+            broker.process_notify(max_messages=0)
