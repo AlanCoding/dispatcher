@@ -37,6 +37,16 @@ async def aget_metrics():
         return response
 
 
+async def aget_metrics_json():
+    async with httpx.AsyncClient() as client:
+        # Request metrics with JSON format
+        response = await client.get(
+            f"http://localhost:{TEST_METRICS_PORT}/metrics",
+            headers={"Accept": "application/json"}
+        )
+        return response
+
+
 @pytest.mark.asyncio
 async def test_get_metrics(ametrics_dispatcher):
     assert ametrics_dispatcher.metrics.port == TEST_METRICS_PORT  # sanity, that config took effect
@@ -57,6 +67,20 @@ async def test_get_metrics(ametrics_dispatcher):
     # Check for another metric to be more thorough, e.g., worker_count
     assert "dispatcher_worker_count" in resp.text
 
+    # JSON test and assertion
+    get_task = asyncio.create_task(aget_metrics_json())
+    resp = await get_task
+    assert resp.status_code == 200
+    # Verify the Content-Type header for JSON metrics
+    expected_content_type = "application/json; charset=utf-8"
+    assert resp.headers.get("content-type") == expected_content_type
+    
+    # Parse JSON response and verify structure
+    metrics_data = resp.json()
+    assert isinstance(metrics_data, list)
+    # Verify some expected metrics are present
+    assert any(metric.get('name') == 'dispatcher_messages_received' for metric in metrics_data)
+    assert any(metric.get('name') == 'dispatcher_worker_count' for metric in metrics_data)
 
     # Normally handled by fixture, we made a main loop task, so take care of our own task
     await ametrics_dispatcher.shutdown()

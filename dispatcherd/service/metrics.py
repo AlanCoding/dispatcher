@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Any, Generator, Optional
+import json
 
 # Metrics library
 from prometheus_client import CollectorRegistry, generate_latest
@@ -9,6 +10,7 @@ from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.core import CounterMetricFamily
 from prometheus_client.metrics_core import Metric
 from prometheus_client.registry import Collector
+from prometheus_client.parser import text_string_to_metric_families
 
 from ..protocols import DispatcherMain
 
@@ -85,17 +87,44 @@ class CustomHttpServer:
             return
 
         # Read headers (and ignore them for now)
+        accept_header = None
         while True:
             header_line = await reader.readline()
             if header_line == b'\r\n':
                 break
+            if header_line.lower().startswith(b'accept:'):
+                accept_header = header_line.decode('utf-8').strip().split(':', 1)[1].strip()
 
         if method == 'GET':
             try:
-                metrics_data = generate_latest(self.registry)
-                body = metrics_data.decode('utf-8')
+                # Check if client accepts JSON
+                if accept_header and 'application/json' in accept_header:
+                    metrics_data = generate_latest(self.registry)
+                    # Convert text format to JSON format
+                    metrics_text = metrics_data.decode('utf-8')
+                    metrics = list(text_string_to_metric_families(metrics_text))
+                    # Convert metrics to JSON format
+                    json_metrics = []
+                    for metric in metrics:
+                        metric_dict = {
+                            'name': metric.name,
+                            'type': metric.type,
+                            'help': metric.documentation,
+                            'metrics': []
+                        }
+                        for sample in metric.samples:
+                            metric_dict['metrics'].append({
+                                'labels': sample.labels,
+                                'value': sample.value
+                            })
+                        json_metrics.append(metric_dict)
+                    body = json.dumps(json_metrics)
+                    content_type = "application/json; charset=utf-8"
+                else:
+                    metrics_data = generate_latest(self.registry)
+                    content_type = "text/plain; version=0.0.4; charset=utf-8"
+                    body = metrics_data.decode('utf-8')
                 status_line = "HTTP/1.1 200 OK"
-                content_type = "text/plain; version=0.0.4; charset=utf-8"
             except Exception:
                 # Raising any exceptions would pose problems for the overall task system, so logged
                 logger.exception(f"Error generating metrics")
