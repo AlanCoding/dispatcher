@@ -1,15 +1,20 @@
 import asyncio
 import io
 import logging
+import os
+import time
+from collections import OrderedDict
 
 from ..protocols import DispatcherMain
+from .process_inspector import PROCFS_ROOT, inspect_process_group
 
-__all__ = ['running', 'cancel', 'alive', 'aio_tasks', 'workers', 'producers', 'metrics', 'main', 'status', 'chunks', 'set_log_level']
+__all__ = ['running', 'cancel', 'alive', 'aio_tasks', 'workers', 'producers', 'metrics', 'main', 'processes', 'status', 'chunks', 'set_log_level']
 
 
 logger = logging.getLogger(__name__)
 DISPATCHER_LOGGER_NAME = 'dispatcherd'
 dispatcherd_logger = logging.getLogger(DISPATCHER_LOGGER_NAME)
+PROCESS_TREE_LOG_THRESHOLD = 0.01
 
 
 def task_filter_match(pool_task: dict, msg_data: dict) -> bool:
@@ -180,6 +185,43 @@ async def chunks(dispatcher: DispatcherMain, data: dict) -> dict[str, dict]:
         'status': dispatcher.chunk_accumulator.get_status_data(),
         'partials': partials,
     }
+
+
+async def processes(dispatcher: DispatcherMain, data: dict) -> dict:
+    """Return basic process tree information for the dispatcherd process group."""
+    if not PROCFS_ROOT.exists():
+        return {'error': f'procfs path "{PROCFS_ROOT}" is not available on this system.'}
+
+    if not hasattr(os, 'getpgid'):
+        return {'error': 'process inspection requires os.getpgid support on this platform.'}
+
+    getpgid = getattr(os, 'getpgid', None)
+    pgid_value = data.get('pgid')
+    if pgid_value is None:
+        try:
+            target_pgid = getpgid(0)
+        except OSError as exc:
+            return {'error': f'unable to determine process group id: {exc}'}
+    else:
+        try:
+            target_pgid = int(pgid_value)
+        except (TypeError, ValueError):
+            return {'error': 'pgid filter must be an integer.'}
+
+    start = time.perf_counter()
+    process_tree, process_count, errors = inspect_process_group(target_pgid)
+    duration = time.perf_counter() - start
+    if duration > PROCESS_TREE_LOG_THRESHOLD:
+        logger.info('process inspection took %.4f seconds (processes=%s, pgid=%s)', duration, process_count, target_pgid)
+
+    result: OrderedDict[str, object] = OrderedDict()
+    result['pgid'] = target_pgid
+    result['process_count'] = process_count
+    result['duration_seconds'] = duration
+    result['roots'] = process_tree
+    if errors:
+        result['errors'] = errors
+    return result
 
 
 async def status(dispatcher: DispatcherMain, data: dict) -> dict:
