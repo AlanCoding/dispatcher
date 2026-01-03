@@ -83,3 +83,15 @@ async def test_wait_for_producers_ready_cleanup_on_cancel():
     assert not _pending_tmp_wait_tasks()
 
     await dispatcher.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_producers_ready_cleanup_on_timeout():
+    dispatcher = _dispatcher_with_hanging_producer()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(dispatcher.wait_for_producers_ready(), timeout=0.01)
+
+    assert not _pending_tmp_wait_tasks()
+
+    await dispatcher.shutdown()
