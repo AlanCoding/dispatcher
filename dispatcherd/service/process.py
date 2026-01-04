@@ -115,7 +115,7 @@ class ProcessManager:
         kwargs['finished_queue'] = self.finished_queue
         return ProcessProxy(args=args, kwargs=kwargs, ctx=self.ctx, **proxy_kwargs)
 
-    async def read_finished(self):
+    async def read_finished(self) -> dict[str, str | int]:
         t = asyncio.create_task(
             asyncio.to_thread(self.finished_queue.get),
             name="finished_queue_get",
