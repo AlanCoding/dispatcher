@@ -46,6 +46,10 @@ class DispatcherMain(DispatcherMainProtocol):
         else:
             self.node_id = str(uuid4())
 
+        # Address confusion about main task responsibility,
+        # if other code calls .shutdown() then we do not want to, avoid contention issues
+        self.has_shutdown = False
+
         self.metrics = metrics
 
         self.delayer: DelayerProtocol = Delayer(self.process_message_now, shared=shared)
@@ -109,6 +113,7 @@ class DispatcherMain(DispatcherMainProtocol):
             loop.add_signal_handler(sig, self.receive_signal)
 
     async def shutdown(self) -> None:
+        self.has_shutdown = True
         self.shared.exit_event.set()  # may already be set
         logger.debug("Shutting down, starting with producers.")
         for producer in self.producers:
@@ -300,7 +305,8 @@ class DispatcherMain(DispatcherMainProtocol):
                     await self.recycle_broker_producers()  # Otherwise, one or some of the producers broke
 
         finally:
-            await self.shutdown()
+            if not self.has_shutdown:
+                await self.shutdown()
 
             if metrics_task:
                 metrics_task.cancel()
