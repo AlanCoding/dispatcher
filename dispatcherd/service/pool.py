@@ -506,25 +506,6 @@ class WorkerPool(WorkerPoolProtocol):
                 logger.warning(f'worker_id={worker.worker_id} was found alive unexpectedly')
                 await worker.stop()
 
-    async def force_shutdown(self) -> None:
-        for worker in self.workers:
-            if worker.process.pid and worker.process.is_alive():
-                logger.warning(f'Force killing worker {worker.worker_id} pid={worker.process.pid}')
-                worker.process.kill()
-
-        try:
-            self.process_manager.finished_queue.put_nowait('stop')
-        except Exception:
-            logger.exception('Failed to send stop sentinel to finished queue during force shutdown')
-
-        if self.read_results_task:
-            self.read_results_task.cancel()
-            logger.info('Finished watcher had to be canceled, awaiting it a second time')
-            try:
-                await self.read_results_task
-            except asyncio.CancelledError:
-                pass
-
     async def shutdown(self) -> None:
         # Shutting down the management task first reduces the number of tasks that might modify self.workers
         self.events.management_event.set()
@@ -545,18 +526,32 @@ class WorkerPool(WorkerPoolProtocol):
         self.blocker.shutdown()
         await self.stop_workers()
 
-        # If any worker has an 'error' status, send a stop message to the finished queue
-        if any(worker.status == 'error' for worker in self.workers):
-            logger.info("At least one worker has an 'error' status, sending stop message to finished queue.")
-            self.process_manager.finished_queue.put('stop')
+        for worker in self.workers:
+            if worker.counts_for_capacity:
+                if worker.process.pid and worker.process.is_alive():
+                    logger.warning(f'Force killing worker {worker.worker_id} pid={worker.process.pid}')
+                    worker.process.kill()
 
         if self.read_results_task:
+            try:
+                self.process_manager.finished_queue.put_nowait('stop')
+            except Exception:
+                logger.exception('Failed to send stop sentinel to finished queue during force shutdown')
+
             logger.info('Waiting for the finished watcher to return')
             try:
                 await asyncio.wait_for(self.read_results_task, timeout=self.shutdown_timeout)
             except asyncio.TimeoutError:
                 logger.warning(f'The finished task failed to cancel in {self.shutdown_timeout} seconds, will force.')
-                await self.force_shutdown()
+
+                if self.read_results_task:
+                    self.read_results_task.cancel()
+                    logger.info('Finished watcher had to be canceled, awaiting it a second time')
+                    try:
+                        await self.read_results_task
+                    except asyncio.CancelledError:
+                        pass
+
             except asyncio.CancelledError:
                 logger.info('The finished task was canceled, but we are shutting down so that is alright')
             self.read_results_task = None
