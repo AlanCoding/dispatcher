@@ -12,7 +12,7 @@ from ..service.main import DispatcherMain
 logger = logging.getLogger(__name__)
 
 
-def _format_task_details(task: asyncio.Task, stack_limit: int = 10) -> str:
+def _format_task_details(task: asyncio.Task) -> str:
     """Render pending/done task diagnostics so teardown can log a useful traceback."""
     details: list[str] = [f'Pending task during teardown: {task}']
     if task.done():
@@ -29,7 +29,7 @@ def _format_task_details(task: asyncio.Task, stack_limit: int = 10) -> str:
 
     buffer = io.StringIO()
     try:
-        task.print_stack(file=buffer, limit=stack_limit)
+        task.print_stack(file=buffer)
         stack = buffer.getvalue() or '  <no stack available>'
     except Exception as stack_exc:  # pragma: no cover - diagnostic path
         stack = f'  <failed to capture stack: {stack_exc}>'

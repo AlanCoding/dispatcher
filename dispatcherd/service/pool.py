@@ -539,12 +539,13 @@ class WorkerPool(WorkerPoolProtocol):
         if not self.read_results_task:
             return
         try:
-            self.process_manager.finished_queue.put_nowait('stop')
+            self.process_manager.finished_queue.put('stop', timeout=self.shutdown_timeout / 2.0)
         except Exception:
             logger.exception('Failed to send stop sentinel to finished queue during force shutdown')
 
         logger.info('Waiting for the finished watcher to return')
         try:
+            # Task should exit either due to workers returning or receiving stop sentinel
             await asyncio.wait_for(self.read_results_task, timeout=self.shutdown_timeout)
         except asyncio.TimeoutError:
             logger.warning(f'The finished task failed to cancel in {self.shutdown_timeout} seconds, will force.')
@@ -559,11 +560,17 @@ class WorkerPool(WorkerPoolProtocol):
         self.read_results_task = None
 
     async def shutdown(self) -> None:
+        print('_shutdown_management_task')
         await self._shutdown_management_task()
+        print('_shutdown_work_queues')
         await self._shutdown_work_queues()
+        print('_stop_and_cleanup_workers')
         await self._stop_and_cleanup_workers()
+        print('_shutdown_results_task')
         await self._shutdown_results_task()
+        print('process_manager.shutdown')
         self.process_manager.shutdown()
+        print('end of pool shutdown')
 
         logger.info('Pool is shut down')
 
