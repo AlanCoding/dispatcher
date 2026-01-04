@@ -37,7 +37,7 @@ async def adispatcher_service(config: dict) -> AsyncGenerator[DispatcherMain, An
             pending = [task for task in asyncio.all_tasks() if task is not asyncio.current_task() and not task.done()]
             if pending:
                 for task in pending:
-                    logger.error('Pending task during teardown: %s', task)
+                    print('Pending task during teardown: %s', task)
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
