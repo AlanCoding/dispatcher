@@ -63,8 +63,8 @@ async def test_get_metrics(ametrics_dispatcher):
     finally:
 
         # Normally handled by fixture, we made a main loop task, so take care of our own task
-        await ametrics_dispatcher.shutdown()
         if main_task:
+            main_task.cancel()
             await asyncio.wait_for(main_task, timeout=5)
 
 
@@ -98,6 +98,6 @@ async def test_metrics_invalid_utf8_returns_400(ametrics_dispatcher):
         assert b"Bad Request" in response_bytes
 
     finally:
-        await ametrics_dispatcher.shutdown()
         if main_task:
+            main_task.cancel()
             await asyncio.wait_for(main_task, timeout=5)
