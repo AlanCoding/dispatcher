@@ -49,6 +49,7 @@ class DispatcherMain(DispatcherMainProtocol):
         # Address confusion about main task responsibility,
         # if other code calls .shutdown() then we do not want to, avoid contention issues
         self.has_shutdown = False
+        self.shutdown_lock = asyncio.Lock()
 
         self.metrics = metrics
 
@@ -113,26 +114,27 @@ class DispatcherMain(DispatcherMainProtocol):
             loop.add_signal_handler(sig, self.receive_signal)
 
     async def shutdown(self) -> None:
-        self.has_shutdown = True
-        self.shared.exit_event.set()  # may already be set
-        logger.debug("Shutting down, starting with producers.")
-        for producer in self.producers:
+        with self.shutdown_lock:
+            self.has_shutdown = True
+            self.shared.exit_event.set()  # may already be set
+            logger.debug("Shutting down, starting with producers.")
+            for producer in self.producers:
+                try:
+                    await producer.shutdown()
+                except Exception:
+                    logger.exception('Producer task had error')
+
+            # Handle delayed tasks and inform user
+            await self.delayer.shutdown()
+
+            logger.debug('Gracefully shutting down worker pool')
             try:
-                await producer.shutdown()
+                await self.pool.shutdown()
             except Exception:
-                logger.exception('Producer task had error')
+                logger.exception('Pool manager encountered error')
 
-        # Handle delayed tasks and inform user
-        await self.delayer.shutdown()
-
-        logger.debug('Gracefully shutting down worker pool')
-        try:
-            await self.pool.shutdown()
-        except Exception:
-            logger.exception('Pool manager encountered error')
-
-        logger.debug('Setting event to exit main loop')
-        self.shared.exit_event.set()
+            logger.debug('Setting event to exit main loop')
+            self.shared.exit_event.set()
 
     async def connected_callback(self, producer: Producer) -> None:
         return
@@ -290,6 +292,8 @@ class DispatcherMain(DispatcherMainProtocol):
         if self.metrics:
             metrics_task = asyncio.create_task(self.metrics.start_server(self), name='metrics_server')
             ensure_fatal(metrics_task, exit_event=self.shared.exit_event)
+
+        self.has_shutdown = False
 
         try:
             await self.start_working()
