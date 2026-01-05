@@ -114,7 +114,7 @@ class DispatcherMain(DispatcherMainProtocol):
             loop.add_signal_handler(sig, self.receive_signal)
 
     async def shutdown(self) -> None:
-        with self.shutdown_lock:
+        async with self.shutdown_lock:
             self.has_shutdown = True
             self.shared.exit_event.set()  # may already be set
             logger.debug("Shutting down, starting with producers.")
