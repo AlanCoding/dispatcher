@@ -116,6 +116,8 @@ Process management options will be added to this section later.
 These options are mainly concerned with worker
 management. For instance, auto-scaling options will be here,
 like worker count, etc.
+You can also tune `results_read_timeout`, which configures how long the pool waits
+for items on the finished queue before re-checking shutdown conditions.
 
 #### Producers
 

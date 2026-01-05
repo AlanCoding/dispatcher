@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import multiprocessing
+import queue
 from multiprocessing.context import BaseContext
 from types import ModuleType
 from typing import Any, Callable, Iterable
@@ -79,6 +80,8 @@ def _read_finished_log_done(t: asyncio.Task) -> None:
     except asyncio.CancelledError:
         return
     if exc:
+        if isinstance(exc, queue.Empty):
+            return
         logger.exception("finished_queue.get() task failed", exc_info=exc)
 
 
@@ -115,9 +118,9 @@ class ProcessManager:
         kwargs['finished_queue'] = self.finished_queue
         return ProcessProxy(args=args, kwargs=kwargs, ctx=self.ctx, **proxy_kwargs)
 
-    async def read_finished(self) -> dict[str, str | int]:
+    async def read_finished(self, timeout: float | None = None) -> dict[str, str | int]:
         t = asyncio.create_task(
-            asyncio.to_thread(self.finished_queue.get),
+            asyncio.to_thread(self.finished_queue.get, timeout=timeout),
             name="finished_queue_get",
         )
         t.add_done_callback(_read_finished_log_done)

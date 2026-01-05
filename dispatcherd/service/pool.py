@@ -2,6 +2,7 @@ import asyncio
 import logging
 import multiprocessing
 import os
+import queue
 import signal
 import time
 from collections import OrderedDict
@@ -236,6 +237,7 @@ class WorkerPool(WorkerPoolProtocol):
         scaledown_interval: float = 15.0,
         worker_stop_wait: float = 30.0,
         worker_removal_wait: float = 30.0,
+        results_read_timeout: float = 0.5,
     ) -> None:
         self.min_workers = min_workers
 
@@ -275,6 +277,7 @@ class WorkerPool(WorkerPoolProtocol):
         self.scaledown_interval = scaledown_interval  # seconds for poll to see if we should retire workers
         self.worker_stop_wait = worker_stop_wait  # seconds to wait for a worker to exit on its own before SIGTERM, SIGKILL
         self.worker_removal_wait = worker_removal_wait  # after worker process exits, seconds to keep its record, for stats
+        self.results_read_timeout = results_read_timeout  # seconds to wait for finished_queue
 
         # queuer and blocker objects hold an internal inventory of tasks that can not yet run
         self.queuer = Queuer(self.workers)
@@ -674,8 +677,13 @@ class WorkerPool(WorkerPoolProtocol):
     async def read_results_forever(self, dispatcher: DispatcherMain) -> None:
         """Perpetual task that continuously waits for task completions."""
         while True:
-            # Wait for a result from the finished queue
-            message = await self.process_manager.read_finished()
+            try:
+                message = await self.process_manager.read_finished(timeout=self.results_read_timeout)
+            except queue.Empty:
+                if self.shared.exit_event.is_set():
+                    logger.warning('Finished queue read timed out during shutdown, exiting results task')
+                    return
+                continue
 
             if message == 'stop':
                 if self.shared.exit_event.is_set():
