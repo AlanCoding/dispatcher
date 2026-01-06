@@ -130,6 +130,12 @@ class TaskWorker(TaskWorkerProtocol):
             return True
         return False
 
+    def _worker_is_stopping(self) -> bool:
+        """Check if the worker should avoid dispatching more follow-up work."""
+        if os.getppid() != self.ppid:
+            return True
+        return self.signal_handler.kill_now or self.exit_after_current_task
+
     def get_uuid(self, message: dict[str, Any]) -> str:
         return message.get('uuid', '<unknown>')
 
@@ -168,7 +174,7 @@ class TaskWorker(TaskWorkerProtocol):
             logger.info(f'Worker {self.worker_id} task requested worker exit (uuid={self.get_uuid(message)})')
             raise
 
-    def perform_work(self, message: dict) -> dict[str, Any]:
+    def perform_work(self, message: dict, *, _reset_exit_state: bool = True) -> dict[str, Any]:
         """
         Import and run code for a task e.g.,
 
@@ -190,14 +196,13 @@ class TaskWorker(TaskWorkerProtocol):
         """
         time_started = time.time()
         result = None
-        exit_requested = False
-        self.exit_after_current_task = False
+        if _reset_exit_state:
+            self.exit_after_current_task = False
 
         try:
             result = self.run_callable(message)
         except DispatcherExit as exit_exc:
             self.exit_after_current_task = True
-            exit_requested = True
             result = exit_exc.result
         except Exception as exc:
             result = exc
@@ -219,19 +224,23 @@ class TaskWorker(TaskWorkerProtocol):
                 traceback.print_tb(tb)
 
             for callback in message.get('errbacks', []) or []:
+                if self._worker_is_stopping():
+                    break
                 callback['uuid'] = self.get_uuid(message)
-                self.perform_work(callback)
+                self.perform_work(callback, _reset_exit_state=False)
         finally:
             # TODO: callback after running a task, previously ran
             # kube_config._cleanup_temp_files()
             pass
 
         for callback in message.get('callbacks', []) or []:
+            if self._worker_is_stopping():
+                break
             callback['uuid'] = self.get_uuid(message)
-            self.perform_work(callback)
+            self.perform_work(callback, _reset_exit_state=False)
         finished_message = self.get_finished_message(result, message, time_started)
 
-        if exit_requested:
+        if self._worker_is_stopping():
             finished_message['is_stopping'] = True
 
         return finished_message
