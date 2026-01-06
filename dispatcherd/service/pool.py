@@ -109,9 +109,12 @@ class PoolWorker(HasWakeup, PoolWorkerProtocol):
         while time.monotonic() - start_time < total_timeout:
             if not self.process.is_alive():
                 # Process already exited, likely due to process group SIGTERM
-                logger.info(f'Worker {self.worker_id} pid={self.process.pid} already exited, likely due to process group signal')
-                self.status = 'error'  # Set status to 'error' instead of 'exited'
-                self.exit_msg_event.set()  # Set event to prevent other code from waiting
+                if self.exit_msg_event.is_set():
+                    logger.debug(f'Worker {self.worker_id} pid={self.process.pid} exited after signaling shutdown, skipping error transition')
+                else:
+                    logger.info(f'Worker {self.worker_id} pid={self.process.pid} already exited, likely due to process group signal')
+                    self.status = 'error'  # Set status to 'error' instead of 'exited'
+                    self.exit_msg_event.set()  # Set event to prevent other code from waiting
                 break
 
             try:
