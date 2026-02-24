@@ -250,9 +250,41 @@ class WorkerUsageTracker:
     def record_task_finish(self, running_ct: int) -> None:
         self._last_used_by_ct[running_ct] = time.monotonic()
 
+    def is_tracked(self, worker_ct: int) -> bool:
+        """Check if the tracker has a record for this worker count."""
+        return worker_ct in self._last_used_by_ct
+
+    def fill_unknown_usage(self, worker_ct: int, running_ct: int) -> None:
+        """Lazy fallback for record_task_start / record_task_finish.
+
+        Normally, every task start and finish records usage at the current
+        worker count via record_task_start / record_task_finish.  This keeps
+        the hot path fast (O(1) dict write, no traversals).  However, if a
+        recording is ever missed — e.g. due to a bug or a race — the tracker
+        may have no entry for the current worker count, leaving scale-down
+        unable to make a decision.
+
+        This method is the lazy corrective: called from the periodic
+        scale-down check only when a gap is detected.  It fills all missing
+        entries up to worker_ct based on current demand.  Keys at or below
+        running_ct are set to blocked (actively in use).  Keys above
+        running_ct are set to the current timestamp (idle surplus,
+        scale-down allowed after scaledown_wait).  Existing entries are
+        never overwritten.
+        """
+        now = time.monotonic()
+        for ct in range(1, worker_ct + 1):
+            if ct not in self._last_used_by_ct:
+                if ct <= running_ct:
+                    self._last_used_by_ct[ct] = self._SCALE_DOWN_BLOCKED
+                    logger.warning(f'Backfilled missing usage entry for count {ct} as blocked (running_ct={running_ct})')
+                else:
+                    self._last_used_by_ct[ct] = now
+                    logger.warning(f'Backfilled missing usage entry for count {ct} as idle (running_ct={running_ct})')
+
     def should_scale_down(self, worker_ct: int) -> bool:
         if worker_ct not in self._last_used_by_ct:
-            logger.info(
+            logger.warning(
                 f'No record of needing {worker_ct} workers, allowing scale-down'
                 f' (worker count exceeded tracked usage, near={self._near_worker_ct_summary(worker_ct)})'
             )
@@ -405,6 +437,9 @@ class WorkerPool(WorkerPoolProtocol):
     def should_scale_down(self) -> bool:
         "If True, we have not had enough work lately to justify the number of workers we are running"
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
+        if not self.usage_tracker.is_tracked(worker_ct):
+            running_ct = self.get_running_count()
+            self.usage_tracker.fill_unknown_usage(worker_ct, running_ct)
         return self.usage_tracker.should_scale_down(worker_ct)
 
     async def scale_workers(self) -> int:

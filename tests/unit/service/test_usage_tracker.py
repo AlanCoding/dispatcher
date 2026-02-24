@@ -55,6 +55,62 @@ class TestRecordAndScaleDown:
         assert tracker.should_scale_down(3) is True
 
 
+class TestFillUnknownUsage:
+    def test_gaps_below_running_ct_filled_as_blocked(self):
+        """Missing keys at or below the current load are filled as blocked."""
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        tracker.record_task_start(1)
+        tracker.record_task_start(3)
+        # Key 2 is a gap — fill with running_ct=3
+        tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
+        assert tracker.should_scale_down(2) is False  # filled as blocked
+
+    def test_gaps_above_running_ct_filled_as_idle(self):
+        """Missing keys above the current load are filled with a timestamp."""
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        tracker.record_task_start(1)
+        # Keys 2-5 are absent — fill with running_ct=1
+        tracker.fill_unknown_usage(worker_ct=5, running_ct=1)
+        # Keys 2-5 were filled as idle (timestamp = now), too recent to scale down
+        assert tracker.should_scale_down(2) is False
+        assert tracker.should_scale_down(5) is False
+
+    def test_does_not_overwrite_existing_entries(self):
+        """Existing entries are preserved during fill."""
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        tracker.record_task_start(2)
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.record_task_finish(3)
+        # Fill — key 2 (blocked) and key 3 (timestamp) should be unchanged
+        with patch('time.monotonic', return_value=base + 120.0):
+            tracker.fill_unknown_usage(worker_ct=5, running_ct=1)
+        assert tracker.should_scale_down(2) is False  # still blocked
+        with patch('time.monotonic', return_value=base + 120.0):
+            assert tracker.should_scale_down(3) is True  # still old timestamp
+
+    def test_filled_idle_entries_allow_eventual_scale_down(self):
+        """Idle-filled entries allow scale-down after scaledown_wait passes."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
+        # Immediately after fill — too recent
+        with patch('time.monotonic', return_value=base):
+            assert tracker.should_scale_down(1) is False
+        # After scaledown_wait — allowed
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(1) is True
+            assert tracker.should_scale_down(2) is True
+            assert tracker.should_scale_down(3) is True
+
+    def test_is_tracked(self):
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        assert tracker.is_tracked(3) is False
+        tracker.record_task_start(3)
+        assert tracker.is_tracked(3) is True
+
+
 class TestStatusData:
     def test_empty_tracker(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
