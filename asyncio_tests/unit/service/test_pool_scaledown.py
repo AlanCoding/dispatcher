@@ -1,15 +1,14 @@
 # Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 # See also: tests/unit/service/test_usage_tracker.py for synchronous unit tests of WorkerUsageTracker
 import time
+from unittest.mock import patch
 
 import pytest
-
-from dispatcherd.service.pool import WorkerUsageTracker
 
 
 @pytest.mark.asyncio
 async def test_scale_down_when_never_needed_this_many_workers(pool_factory):
-    """Core regression: if _last_used_by_ct has entries for counts 1-2 but NOT 3,
+    """Core regression: if usage tracker has entries for counts 1-2 but NOT 3,
     should_scale_down() must return True and scale_workers() must produce a stopping worker."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -19,10 +18,9 @@ async def test_scale_down_when_never_needed_this_many_workers(pool_factory):
         pool.workers.get_by_id(worker_id).status = 'ready'
 
     # Only have entries for counts 1 and 2, NOT 3
-    pool.usage_tracker._last_used_by_ct = {
-        1: time.monotonic() - 120.0,
-        2: time.monotonic() - 120.0,
-    }
+    with patch('time.monotonic', return_value=time.monotonic() - 120.0):
+        pool.usage_tracker.record_task_finish(1)
+        pool.usage_tracker.record_task_finish(2)
 
     assert pool.should_scale_down() is True
     await pool.scale_workers()
@@ -32,7 +30,7 @@ async def test_scale_down_when_never_needed_this_many_workers(pool_factory):
 
 @pytest.mark.asyncio
 async def test_scale_down_blocked_by_sentinel(pool_factory):
-    """3 ready idle workers with _last_used_by_ct[3] set to the sentinel.
+    """3 ready idle workers with usage tracker recording active work at count 3.
     should_scale_down() must return False."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -47,7 +45,7 @@ async def test_scale_down_blocked_by_sentinel(pool_factory):
 
 @pytest.mark.asyncio
 async def test_scale_down_cascade_through_gaps(pool_factory):
-    """10 ready idle workers, _last_used_by_ct only has entries for counts 1-5.
+    """10 ready idle workers, usage tracker only has entries for counts 1-5.
     Repeatedly calling scale_workers() should scale all the way down to min_workers=1."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -56,7 +54,9 @@ async def test_scale_down_cascade_through_gaps(pool_factory):
         pool.workers.get_by_id(worker_id).status = 'ready'
 
     # Only populate entries for counts 1-5
-    pool.usage_tracker._last_used_by_ct = {i: time.monotonic() - 120.0 for i in range(1, 6)}
+    with patch('time.monotonic', return_value=time.monotonic() - 120.0):
+        for i in range(1, 6):
+            pool.usage_tracker.record_task_finish(i)
 
     # Repeatedly scale down, retiring stopped workers between calls
     for _ in range(20):  # enough iterations to converge
@@ -73,7 +73,7 @@ async def test_scale_down_cascade_through_gaps(pool_factory):
 
 @pytest.mark.asyncio
 async def test_scale_down_with_conflicting_stale_data(pool_factory):
-    """5 ready idle workers exercising all three states of _last_used_by_ct[5]:
+    """5 ready idle workers exercising all three states of usage tracking:
     sentinel (False), old timestamp (True), recent timestamp (False), absent key (True)."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -86,21 +86,24 @@ async def test_scale_down_with_conflicting_stale_data(pool_factory):
     assert pool.should_scale_down() is False
 
     # State 2: old timestamp allows scale-down
-    pool.usage_tracker._last_used_by_ct[5] = time.monotonic() - 120.0
+    with patch('time.monotonic', return_value=time.monotonic() - 120.0):
+        pool.usage_tracker.record_task_finish(5)
     assert pool.should_scale_down() is True
 
     # State 3: recent timestamp blocks scale-down
-    pool.usage_tracker._last_used_by_ct[5] = time.monotonic()
+    pool.usage_tracker.record_task_finish(5)
     assert pool.should_scale_down() is False
 
-    # State 4: absent key allows scale-down
-    del pool.usage_tracker._last_used_by_ct[5]
+    # State 4: absent key allows scale-down (add a worker to exceed tracked counts)
+    worker_id = await pool.up()
+    pool.workers.get_by_id(worker_id).status = 'ready'
+    # Now worker_ct=6, no entry for 6 exists
     assert pool.should_scale_down() is True
 
 
 @pytest.mark.asyncio
 async def test_status_data_includes_last_used_diagnostics(pool_factory):
-    """Populate _last_used_by_ct with 6 entries mixing sentinels and timestamps.
+    """Populate usage tracker with 6 entries mixing sentinels and timestamps.
     Assert get_status_data() includes count, top5, and near-worker-ct with correct formatting."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -109,17 +112,21 @@ async def test_status_data_includes_last_used_diagnostics(pool_factory):
         worker_id = await pool.up()
         pool.workers.get_by_id(worker_id).status = 'ready'
 
-    now = time.monotonic()
-    pool.usage_tracker._last_used_by_ct = {
-        1: now - 100.0,
-        2: now - 50.0,
-        3: WorkerUsageTracker._SCALE_DOWN_BLOCKED,
-        4: now - 10.0,
-        5: WorkerUsageTracker._SCALE_DOWN_BLOCKED,
-        6: now - 1.0,
-    }
+    base = 1000.0
+    with patch('time.monotonic', return_value=base):
+        pool.usage_tracker.record_task_finish(1)
+    with patch('time.monotonic', return_value=base + 50.0):
+        pool.usage_tracker.record_task_finish(2)
+    pool.usage_tracker.record_task_start(3)
+    with patch('time.monotonic', return_value=base + 90.0):
+        pool.usage_tracker.record_task_finish(4)
+    pool.usage_tracker.record_task_start(5)
+    with patch('time.monotonic', return_value=base + 99.0):
+        pool.usage_tracker.record_task_finish(6)
 
-    data = pool.get_status_data()
+    with patch('time.monotonic', return_value=base + 100.0):
+        data = pool.get_status_data()
+
     assert data["worker_ct"] == 4
     assert data["usage"]["count"] == 6
 
@@ -148,7 +155,7 @@ async def test_status_data_includes_last_used_diagnostics(pool_factory):
 
 @pytest.mark.asyncio
 async def test_status_data_near_worker_ct_shows_absent_keys(pool_factory):
-    """When _last_used_by_ct has no entries near the current worker count,
+    """When usage tracker has no entries near the current worker count,
     the near-worker-ct summary should show 'absent' for missing keys."""
     pool = pool_factory(min_workers=1, max_workers=10)
 
@@ -158,12 +165,12 @@ async def test_status_data_near_worker_ct_shows_absent_keys(pool_factory):
         pool.workers.get_by_id(worker_id).status = 'ready'
 
     # Only populate entries far from worker_ct=8
-    now = time.monotonic()
-    pool.usage_tracker._last_used_by_ct = {1: now - 100.0, 2: now - 50.0}
+    pool.usage_tracker.record_task_finish(1)
+    pool.usage_tracker.record_task_finish(2)
 
     data = pool.get_status_data()
     near = data["usage"]["near_worker_ct"]
-    # Keys [6..10] centered on worker_ct=8, none present in _last_used_by_ct
+    # Keys [6..10] centered on worker_ct=8, none present in usage tracker
     assert set(near.keys()) == {6, 7, 8, 9, 10}
     for k in near:
         assert near[k] == "absent"
