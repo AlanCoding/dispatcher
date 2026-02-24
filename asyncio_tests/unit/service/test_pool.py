@@ -2,7 +2,6 @@ import asyncio
 import logging
 import multiprocessing
 import time
-from typing import Callable
 from unittest import mock
 
 import pytest
@@ -33,18 +32,6 @@ class _InstrumentedQueueWrapper:
 
     async def wait_for_reader(self) -> None:
         await self._reader_waiting.wait()
-
-
-@pytest.fixture
-def pool_factory(test_settings) -> Callable[..., WorkerPool]:
-    def _factory(**kwargs_overrides) -> WorkerPool:
-        pm = ProcessManager(settings=test_settings)
-        kwargs = dict(process_manager=pm, min_workers=5, max_workers=5, shared=SharedAsyncObjects())
-        kwargs.update(kwargs_overrides)
-        pool = WorkerPool(**kwargs)
-        return pool
-
-    return _factory
 
 
 @pytest.fixture
