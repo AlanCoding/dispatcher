@@ -22,6 +22,8 @@ from .process import ProcessManager, ProcessProxy
 
 logger = logging.getLogger(__name__)
 
+_SCALE_DOWN_BLOCKED = object()
+
 
 class PoolWorker(HasWakeup, PoolWorkerProtocol):
     def __init__(self, worker_id: int, process: ProcessProxy) -> None:
@@ -271,13 +273,16 @@ class WorkerPool(WorkerPoolProtocol):
 
         # Track the last time we used X number of workers, like
         # {
-        #   0: None,
-        #   1: None,
+        #   0: _SCALE_DOWN_BLOCKED,
+        #   1: _SCALE_DOWN_BLOCKED,
         #   2: <timestamp>
         # }
-        # where 1 worker is currently in use, and a task using the 2nd worker
-        # finished at <timestamp>, which is compared against out scale down wait time
-        self.last_used_by_ct: dict[int, float | None] = {}
+        # where 1 worker is currently in use (_SCALE_DOWN_BLOCKED means
+        # "actively running tasks, block scale-down"), and a task using the
+        # 2nd worker finished at <timestamp>, which is compared against our
+        # scale down wait time.  An absent key means we never needed that
+        # many workers, so scale-down is allowed immediately.
+        self.last_used_by_ct: dict[int, float | object] = {}
         self.scaledown_wait = scaledown_wait
         self.scaledown_interval = scaledown_interval  # seconds for poll to see if we should retire workers
         self.worker_stop_wait = worker_stop_wait  # seconds to wait for a worker to exit on its own before SIGTERM, SIGKILL
@@ -318,11 +323,22 @@ class WorkerPool(WorkerPoolProtocol):
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
     def get_status_data(self) -> dict[str, Any]:
+        now = time.monotonic()
+        top5_keys = sorted(self.last_used_by_ct, reverse=True)[:5]
+        top5: dict[int, str | float] = {}
+        for k in top5_keys:
+            v = self.last_used_by_ct[k]
+            if v is _SCALE_DOWN_BLOCKED:
+                top5[k] = "blocked"
+            else:
+                top5[k] = round(now - v, 2)  # type: ignore[operator]
         return {
             "next_worker_id": self.next_worker_id,
             "finished_count": self.finished_count,
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
+            "last_used_by_ct_count": len(self.last_used_by_ct),
+            "last_used_by_ct_top5": top5,
         }
 
     async def start_working(self, dispatcher: DispatcherMain) -> None:
@@ -345,12 +361,16 @@ class WorkerPool(WorkerPoolProtocol):
     def should_scale_down(self) -> bool:
         "If True, we have not had enough work lately to justify the number of workers we are running"
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
-        last_used = self.last_used_by_ct.get(worker_ct)
-        if last_used:
-            delta = time.monotonic() - last_used
-            # Criteria - last time we used this-many workers was greater than the setting
-            return bool(delta > self.scaledown_wait)
-        return False
+        if worker_ct not in self.last_used_by_ct:
+            # Never needed this many workers, scale down immediately
+            return True
+        last_used = self.last_used_by_ct[worker_ct]
+        if last_used is _SCALE_DOWN_BLOCKED:
+            # Currently in active use at this capacity, block scale-down
+            return False
+        # Check if idle long enough to justify scale-down
+        delta = time.monotonic() - last_used  # type: ignore[operator]
+        return bool(delta > self.scaledown_wait)
 
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions
@@ -610,7 +630,7 @@ class WorkerPool(WorkerPoolProtocol):
         if 'timeout' in message:
             await self.timeout_runner.kick()  # kick timeout task to set wakeup
         running_ct = self.get_running_count()
-        self.last_used_by_ct[running_ct] = None  # block scale down of this amount
+        self.last_used_by_ct[running_ct] = _SCALE_DOWN_BLOCKED  # block scale down of this amount
 
     async def dispatch_task(self, message: dict) -> None:
         uuid = message.get("uuid", "<unknown>")

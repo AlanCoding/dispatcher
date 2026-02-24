@@ -265,7 +265,9 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(pool_fac
 
     # Starting the task should have happened while the lock was held and should block scale-down timers.
     assert lock_states == [True]
-    assert pool.last_used_by_ct[1] is None
+    from dispatcherd.service.pool import _SCALE_DOWN_BLOCKED
+
+    assert pool.last_used_by_ct[1] is _SCALE_DOWN_BLOCKED
     assert pool.should_scale_down() is False
 
 
