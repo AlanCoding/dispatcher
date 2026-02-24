@@ -275,6 +275,8 @@ class WorkerUsageTracker:
         now = time.monotonic()
         result: dict[int, str | float] = {}
         for k in keys:
+            if k < 0:
+                continue
             if k not in self._last_used_by_ct:
                 result[k] = "absent"
             elif self._last_used_by_ct[k] is self._SCALE_DOWN_BLOCKED:
