@@ -322,23 +322,27 @@ class WorkerPool(WorkerPoolProtocol):
     def received_count(self) -> int:
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
-    def get_status_data(self) -> dict[str, Any]:
+    def _last_used_top5_summary(self) -> dict[int, str | float]:
+        """Return the 5 highest worker-count entries from last_used_by_ct, with human-readable values."""
         now = time.monotonic()
-        top5_keys = sorted(self.last_used_by_ct, reverse=True)[:5]
         top5: dict[int, str | float] = {}
-        for k in top5_keys:
+        for k in sorted(self.last_used_by_ct, reverse=True)[:5]:
             v = self.last_used_by_ct[k]
             if v is _SCALE_DOWN_BLOCKED:
                 top5[k] = "blocked"
             else:
                 top5[k] = round(now - v, 2)  # type: ignore[operator]
+        return top5
+
+    def get_status_data(self) -> dict[str, Any]:
         return {
             "next_worker_id": self.next_worker_id,
             "finished_count": self.finished_count,
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
+            "worker_ct": len([worker for worker in self.workers if worker.counts_for_capacity]),
             "last_used_by_ct_count": len(self.last_used_by_ct),
-            "last_used_by_ct_top5": top5,
+            "last_used_by_ct_top5": self._last_used_top5_summary(),
         }
 
     async def start_working(self, dispatcher: DispatcherMain) -> None:
@@ -363,7 +367,9 @@ class WorkerPool(WorkerPoolProtocol):
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         if worker_ct not in self.last_used_by_ct:
             # Never needed this many workers, scale down immediately
-            logger.info(f'No record of needing {worker_ct} workers, allowing scale-down (worker count exceeded tracked usage)')
+            logger.info(
+                f'No record of needing {worker_ct} workers, allowing scale-down (worker count exceeded tracked usage, top5={self._last_used_top5_summary()})'
+            )
             return True
         last_used = self.last_used_by_ct[worker_ct]
         if last_used is _SCALE_DOWN_BLOCKED:

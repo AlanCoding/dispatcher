@@ -129,6 +129,7 @@ async def test_status_data_includes_last_used_diagnostics(pool_factory):
     }
 
     data = pool.get_status_data()
+    assert data["worker_ct"] == 0  # no workers created, just testing status data formatting
     assert data["last_used_by_ct_count"] == 6
 
     top5 = data["last_used_by_ct_top5"]
