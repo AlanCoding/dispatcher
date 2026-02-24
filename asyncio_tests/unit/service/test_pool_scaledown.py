@@ -7,28 +7,22 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_scale_down_when_never_needed_this_many_workers(fake_pool_factory):
-    """Core regression: if usage tracker has entries for counts 1-2 but NOT 3,
-    should_scale_down() must fill the gap and allow scale-down after scaledown_wait."""
+async def test_scale_down_idle_workers(fake_pool_factory):
+    """3 idle workers, no running tasks.  First tick fills the tracker,
+    second tick (after scaledown_wait) allows scale-down."""
     pool = fake_pool_factory(min_workers=1, max_workers=10)
 
-    # Create 3 ready idle workers
     for _ in range(3):
         worker_id = await pool.up()
         assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
-    # Only have entries for counts 1 and 2, NOT 3
+    # First tick: fills keys 1-3 as idle timestamps — too recent to scale down
     with patch('time.monotonic', return_value=base):
-        pool.usage_tracker.record_task_finish(1)
-        pool.usage_tracker.record_task_finish(2)
-
-    # First call detects the gap at count 3, fills it as idle — too recent to scale down
-    with patch('time.monotonic', return_value=base + 100.0):
         assert pool.should_scale_down() is False
 
-    # After scaledown_wait, the filled entry is old enough — scale down proceeds
-    with patch('time.monotonic', return_value=base + 200.0):
+    # Second tick after scaledown_wait: timestamps are old enough
+    with patch('time.monotonic', return_value=base + 100.0):
         assert pool.should_scale_down() is True
         await pool.scale_workers()
     statuses = [w.status for w in pool.workers]
@@ -36,25 +30,23 @@ async def test_scale_down_when_never_needed_this_many_workers(fake_pool_factory)
 
 
 @pytest.mark.asyncio
-async def test_scale_down_blocked_by_sentinel(fake_pool_factory):
-    """3 ready idle workers with usage tracker recording active work at count 3.
-    should_scale_down() must return False."""
+async def test_scale_down_blocked_by_active_work(fake_pool_factory):
+    """3 workers with 3 running tasks — should_scale_down() must return False."""
     pool = fake_pool_factory(min_workers=1, max_workers=10)
 
     for _ in range(3):
         worker_id = await pool.up()
-        assert pool.workers.get_by_id(worker_id).status == 'ready'
-
-    pool.usage_tracker.record_task_start(3)
+        worker = pool.workers.get_by_id(worker_id)
+        assert worker.status == 'ready'
+        await worker.start_task({'task': 'busy'})
 
     assert pool.should_scale_down() is False
 
 
 @pytest.mark.asyncio
-async def test_scale_down_cascade_through_gaps(fake_pool_factory):
-    """10 ready idle workers, usage tracker only has entries for counts 1-5.
-    After filling gaps and waiting scaledown_wait, repeatedly calling
-    scale_workers() should scale all the way down to min_workers=1."""
+async def test_scale_down_cascade_to_min_workers(fake_pool_factory):
+    """10 idle workers.  After two ticks, repeatedly calling scale_workers()
+    should scale all the way down to min_workers=1."""
     pool = fake_pool_factory(min_workers=1, max_workers=10)
 
     for _ in range(10):
@@ -62,21 +54,14 @@ async def test_scale_down_cascade_through_gaps(fake_pool_factory):
         assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
-    # Only populate entries for counts 1-5
+    # First tick: fill all keys as idle
     with patch('time.monotonic', return_value=base):
-        for i in range(1, 6):
-            pool.usage_tracker.record_task_finish(i)
-
-    # Trigger fill for absent keys 6-10
-    with patch('time.monotonic', return_value=base + 100.0):
         pool.should_scale_down()
 
-    # After scaledown_wait, both original entries (base) and filled entries
-    # (base+100) are old enough — cascade scales all the way down
-    with patch('time.monotonic', return_value=base + 200.0):
+    # After scaledown_wait, cascade scales all the way down
+    with patch('time.monotonic', return_value=base + 100.0):
         for _ in range(20):  # enough iterations to converge
             await pool.scale_workers()
-            # Mark stopping workers as retired so they no longer count for capacity
             for w in pool.workers:
                 if w.status == 'stopping':
                     w.status = 'retired'
@@ -87,89 +72,104 @@ async def test_scale_down_cascade_through_gaps(fake_pool_factory):
 
 
 @pytest.mark.asyncio
-async def test_scale_down_with_conflicting_stale_data(fake_pool_factory):
-    """5 ready idle workers exercising all three states of usage tracking:
-    sentinel (False), old timestamp (True), recent timestamp (False), absent key (True)."""
+async def test_scale_down_respects_active_load(fake_pool_factory):
+    """5 workers, 3 running tasks.  Should scale down surplus but never
+    below the active load."""
     pool = fake_pool_factory(min_workers=1, max_workers=10)
 
+    workers = []
     for _ in range(5):
         worker_id = await pool.up()
-        assert pool.workers.get_by_id(worker_id).status == 'ready'
+        workers.append(pool.workers.get_by_id(worker_id))
+        assert workers[-1].status == 'ready'
 
-    # State 1: sentinel blocks scale-down
-    pool.usage_tracker.record_task_start(5)
-    assert pool.should_scale_down() is False
+    # Give 3 workers tasks
+    for i in range(3):
+        await workers[i].start_task({'task': f'busy-{i}'})
 
-    # State 2: old timestamp allows scale-down
-    with patch('time.monotonic', return_value=time.monotonic() - 120.0):
-        pool.usage_tracker.record_task_finish(5)
-    assert pool.should_scale_down() is True
-
-    # State 3: recent timestamp blocks scale-down
-    pool.usage_tracker.record_task_finish(5)
-    assert pool.should_scale_down() is False
-
-    # State 4: absent key — fill first, then scale-down after scaledown_wait
-    worker_id = await pool.up()
-    pool.workers.get_by_id(worker_id).status = 'ready'
-    # Now worker_ct=6, no entry for 6 exists
     base = 1000.0
+    # First tick: keys 1-3 blocked, keys 4-5 idle timestamps
     with patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False  # triggers fill, too recent
-    with patch('time.monotonic', return_value=base + 120.0):
-        assert pool.should_scale_down() is True  # past scaledown_wait
+        assert pool.should_scale_down() is False
+
+    # After scaledown_wait: surplus keys aged out, scale down from 5
+    with patch('time.monotonic', return_value=base + 100.0):
+        assert pool.should_scale_down() is True
+        await pool.scale_workers()
+
+    statuses = [w.status for w in pool.workers]
+    assert statuses.count('stopping') == 1
+    assert statuses.count('ready') == 4
 
 
 @pytest.mark.asyncio
-async def test_status_data_includes_last_used_diagnostics(fake_pool_factory):
-    """Populate usage tracker with 6 entries mixing sentinels and timestamps.
-    Assert get_status_data() includes count, top5, and near-worker-ct with correct formatting."""
+async def test_blocked_entries_clear_when_load_drops(fake_pool_factory):
+    """When demand drops, previously blocked entries should convert to
+    timestamps and eventually allow scale-down."""
     pool = fake_pool_factory(min_workers=1, max_workers=10)
 
-    # Create 4 ready workers so worker_ct=4
-    for _ in range(4):
+    workers = []
+    for _ in range(5):
         worker_id = await pool.up()
-        assert pool.workers.get_by_id(worker_id).status == 'ready'
+        workers.append(pool.workers.get_by_id(worker_id))
+        assert workers[-1].status == 'ready'
+
+    # All 5 busy
+    for w in workers:
+        await w.start_task({'task': 'busy'})
 
     base = 1000.0
     with patch('time.monotonic', return_value=base):
-        pool.usage_tracker.record_task_finish(1)
-    with patch('time.monotonic', return_value=base + 50.0):
-        pool.usage_tracker.record_task_finish(2)
-    pool.usage_tracker.record_task_start(3)
-    with patch('time.monotonic', return_value=base + 90.0):
-        pool.usage_tracker.record_task_finish(4)
-    pool.usage_tracker.record_task_start(5)
-    with patch('time.monotonic', return_value=base + 99.0):
-        pool.usage_tracker.record_task_finish(6)
+        assert pool.should_scale_down() is False  # all blocked
 
+    # Tasks finish — clear current_task to simulate completion
+    for w in workers:
+        w.current_task = None
+
+    # Next tick: running_ct=0, previously blocked keys become timestamps
+    with patch('time.monotonic', return_value=base + 1.0):
+        assert pool.should_scale_down() is False  # timestamps too recent
+
+    # After scaledown_wait
     with patch('time.monotonic', return_value=base + 100.0):
+        assert pool.should_scale_down() is True
+
+
+@pytest.mark.asyncio
+async def test_status_data_includes_usage_diagnostics(fake_pool_factory):
+    """Populate tracker via fill_unknown_usage with a mix of blocked and idle entries.
+    Assert get_status_data() includes count, top5, and near-worker-ct."""
+    pool = fake_pool_factory(min_workers=1, max_workers=10)
+
+    # Create 4 ready workers, give 2 of them tasks
+    workers = []
+    for _ in range(4):
+        worker_id = await pool.up()
+        workers.append(pool.workers.get_by_id(worker_id))
+        assert workers[-1].status == 'ready'
+
+    await workers[0].start_task({'task': 'busy-1'})
+    await workers[1].start_task({'task': 'busy-2'})
+
+    base = 1000.0
+    # Fill: running_ct=2, so keys 1-2 blocked, keys 3-4 idle
+    with patch('time.monotonic', return_value=base):
+        pool.should_scale_down()
+
+    with patch('time.monotonic', return_value=base + 10.0):
         data = pool.get_status_data()
 
     assert data["worker_ct"] == 4
-    assert data["usage"]["count"] == 6
+    assert data["usage"]["count"] == 4
 
-    top5 = data["usage"]["top5"]
-    # Top 5 highest keys: 6, 5, 4, 3, 2
-    assert set(top5.keys()) == {2, 3, 4, 5, 6}
-
-    # Sentinel entries show "blocked"
-    assert top5[3] == "blocked"
-    assert top5[5] == "blocked"
-
-    # Timestamp entries show seconds-ago as floats
-    assert isinstance(top5[2], float)
-    assert isinstance(top5[4], float)
-    assert isinstance(top5[6], float)
-
-    # Near-worker-ct shows keys [2..6] centered on worker_ct=4
+    # Near worker_ct=4: keys [2..6]
     near = data["usage"]["near_worker_ct"]
     assert set(near.keys()) == {2, 3, 4, 5, 6}
-    assert isinstance(near[2], float)
-    assert near[3] == "blocked"
+    assert near[2] == "blocked"
+    assert isinstance(near[3], float)
     assert isinstance(near[4], float)
-    assert near[5] == "blocked"
-    assert isinstance(near[6], float)
+    assert near[5] == "absent"
+    assert near[6] == "absent"
 
 
 @pytest.mark.asyncio
@@ -183,9 +183,8 @@ async def test_status_data_near_worker_ct_shows_absent_keys(fake_pool_factory):
         worker_id = await pool.up()
         assert pool.workers.get_by_id(worker_id).status == 'ready'
 
-    # Only populate entries far from worker_ct=8
-    pool.usage_tracker.record_task_finish(1)
-    pool.usage_tracker.record_task_finish(2)
+    # Fill only keys 1-2 (via fill with worker_ct=2)
+    pool.usage_tracker.fill_unknown_usage(worker_ct=2, running_ct=0)
 
     data = pool.get_status_data()
     near = data["usage"]["near_worker_ct"]

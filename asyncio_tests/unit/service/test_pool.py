@@ -164,19 +164,21 @@ async def test_scale_down_condition(fake_pool_factory):
         await pool.scale_workers()
     assert len(pool.workers) == 3
     for worker in pool.workers:
-        worker.status = 'ready'  # a lie, for test
         worker.current_task = None
     assert set([worker.status for worker in pool.workers]) == {'ready'}
 
-    # Clear queue and set finished times to long ago
-    pool.queuer.queued_messages = []  # queue has been fully worked through, no workers are busy
-    with mock.patch('time.monotonic', return_value=time.monotonic() - 120.0):
-        for i in range(30):
-            pool.usage_tracker.record_task_finish(i)
+    # Clear queue — no workers are busy
+    pool.queuer.queued_messages = []
 
-    # Outcome of this situation is expected to be a scale-down event
-    assert pool.should_scale_down() is True
-    await pool.scale_workers()
+    base = 1000.0
+    # First tick fills tracker with idle timestamps
+    with mock.patch('time.monotonic', return_value=base):
+        assert pool.should_scale_down() is False
+
+    # After scaledown_wait, scale-down proceeds
+    with mock.patch('time.monotonic', return_value=base + 100.0):
+        assert pool.should_scale_down() is True
+        await pool.scale_workers()
     # Same number of workers but one worker has been sent a stop signal
     assert len(pool.workers) == 3
     assert set([worker.status for worker in pool.workers]) == {'ready', 'stopping'}
@@ -197,10 +199,10 @@ async def test_scale_up_worker_should_not_be_immediately_eligible_for_scaledown(
         worker.status = 'ready'
         worker.current_task = None
 
+    # Pre-fill tracker with old idle timestamps so scale-down would normally be allowed
     idle_timestamp = time.monotonic() - 120.0
     with mock.patch('time.monotonic', return_value=idle_timestamp):
-        for i in range(existing_workers + 1):
-            pool.usage_tracker.record_task_finish(i)
+        pool.usage_tracker.fill_unknown_usage(worker_ct=existing_workers, running_ct=0)
 
     # Queue pressure requires more workers, so scaling up should add one.
     pool.queuer.queued_messages = [{'task': 'waiting.task'} for _ in range(existing_workers + 1)]
@@ -239,10 +241,6 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(fake_poo
     assert worker.status == 'ready'
     worker.current_task = None
 
-    # Pretend the worker idled long enough that, without new work, scale-down is allowed.
-    with mock.patch('time.monotonic', return_value=time.monotonic() - 120.0):
-        pool.usage_tracker.record_task_finish(1)
-
     lock_states: list[bool] = []
 
     async def start_task_under_lock(message):
@@ -254,8 +252,9 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(fake_poo
     message = {'uuid': 'task-123', 'task': 'demo'}
     await pool.dispatch_task(message)
 
-    # Starting the task should have happened while the lock was held and should block scale-down timers.
+    # Starting the task should have happened while the lock was held.
     assert lock_states == [True]
+    # Worker is busy (current_task set), so should_scale_down fills key 1 as blocked.
     assert pool.should_scale_down() is False
 
 

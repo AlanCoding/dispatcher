@@ -5,34 +5,33 @@ from unittest.mock import patch
 from dispatcherd.service.pool import WorkerUsageTracker
 
 
-class TestRecordAndScaleDown:
+class TestFillAndScaleDown:
     def test_absent_key_allows_scale_down(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
         assert tracker.should_scale_down(5) is True
 
-    def test_task_start_blocks_scale_down(self):
+    def test_active_load_blocks_scale_down(self):
+        """Keys at or below running_ct are blocked."""
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(3)
+        tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
         assert tracker.should_scale_down(3) is False
 
-    def test_task_finish_recent_blocks_scale_down(self):
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_finish(3)
-        assert tracker.should_scale_down(3) is False
-
-    def test_task_finish_old_allows_scale_down(self):
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+    def test_idle_surplus_blocks_until_scaledown_wait(self):
+        """Keys above running_ct get a fresh timestamp — blocked until scaledown_wait passes."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
         base = 1000.0
         with patch('time.monotonic', return_value=base):
-            tracker.record_task_finish(3)
-        with patch('time.monotonic', return_value=base + 120.0):
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
+        with patch('time.monotonic', return_value=base):
+            assert tracker.should_scale_down(3) is False
+        with patch('time.monotonic', return_value=base + 11.0):
             assert tracker.should_scale_down(3) is True
 
     def test_scaledown_wait_boundary(self):
         tracker = WorkerUsageTracker(scaledown_wait=10.0)
         base = 1000.0
         with patch('time.monotonic', return_value=base):
-            tracker.record_task_finish(3)
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
         # Just under the wait threshold — should block
         with patch('time.monotonic', return_value=base + 9.0):
             assert tracker.should_scale_down(3) is False
@@ -40,75 +39,55 @@ class TestRecordAndScaleDown:
         with patch('time.monotonic', return_value=base + 11.0):
             assert tracker.should_scale_down(3) is True
 
-    def test_start_then_finish_transitions(self):
+    def test_blocked_entries_refresh_when_still_active(self):
+        """Repeated fills with same running_ct keep entries blocked."""
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(3)
-        assert tracker.should_scale_down(3) is False
-        # Finish replaces sentinel with fresh timestamp, still blocks due to recency
-        tracker.record_task_finish(3)
-        assert tracker.should_scale_down(3) is False
-
-    def test_different_worker_counts_independent(self):
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(2)
-        assert tracker.should_scale_down(2) is False
-        assert tracker.should_scale_down(3) is True
-
-
-class TestFillUnknownUsage:
-    def test_gaps_below_running_ct_filled_as_blocked(self):
-        """Missing keys at or below the current load are filled as blocked."""
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(1)
-        tracker.record_task_start(3)
-        # Key 2 is a gap — fill with running_ct=3
         tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
-        assert tracker.should_scale_down(2) is False  # filled as blocked
+        assert tracker.should_scale_down(3) is False
+        # Second fill, still loaded
+        tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
+        assert tracker.should_scale_down(3) is False
 
-    def test_gaps_above_running_ct_filled_as_idle(self):
-        """Missing keys above the current load are filled with a timestamp."""
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(1)
-        # Keys 2-5 are absent — fill with running_ct=1
-        tracker.fill_unknown_usage(worker_ct=5, running_ct=1)
-        # Keys 2-5 were filled as idle (timestamp = now), too recent to scale down
-        assert tracker.should_scale_down(2) is False
-        assert tracker.should_scale_down(5) is False
-
-    def test_does_not_overwrite_existing_entries(self):
-        """Existing entries are preserved during fill."""
-        tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_start(2)
+    def test_blocked_entries_convert_to_timestamp_when_idle(self):
+        """When running_ct drops, previously blocked entries above it
+        are replaced with a timestamp and start aging."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
         base = 1000.0
-        with patch('time.monotonic', return_value=base):
-            tracker.record_task_finish(3)
-        # Fill — key 2 (blocked) and key 3 (timestamp) should be unchanged
-        with patch('time.monotonic', return_value=base + 120.0):
-            tracker.fill_unknown_usage(worker_ct=5, running_ct=1)
-        assert tracker.should_scale_down(2) is False  # still blocked
-        with patch('time.monotonic', return_value=base + 120.0):
-            assert tracker.should_scale_down(3) is True  # still old timestamp
+        # First fill: all 3 keys blocked
+        tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
+        assert tracker.should_scale_down(3) is False
 
-    def test_filled_idle_entries_allow_eventual_scale_down(self):
-        """Idle-filled entries allow scale-down after scaledown_wait passes."""
+        # Second fill: running_ct dropped, key 3 was blocked but now idle
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=1)
+        # Key 3 now has a timestamp, but too recent
+        with patch('time.monotonic', return_value=base):
+            assert tracker.should_scale_down(3) is False
+        # After scaledown_wait, key 3 allows scale-down
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(3) is True
+        # Key 1 is still blocked (at running_ct)
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(1) is False
+
+    def test_existing_timestamps_not_overwritten_by_fill(self):
+        """Timestamps above running_ct are preserved so they keep aging."""
         tracker = WorkerUsageTracker(scaledown_wait=10.0)
         base = 1000.0
         with patch('time.monotonic', return_value=base):
             tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
-        # Immediately after fill — too recent
-        with patch('time.monotonic', return_value=base):
-            assert tracker.should_scale_down(1) is False
-        # After scaledown_wait — allowed
+        # Second fill much later — timestamps should NOT be refreshed
+        with patch('time.monotonic', return_value=base + 100.0):
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
+        # Original timestamps are preserved, so they're old enough
         with patch('time.monotonic', return_value=base + 11.0):
-            assert tracker.should_scale_down(1) is True
-            assert tracker.should_scale_down(2) is True
             assert tracker.should_scale_down(3) is True
 
-    def test_is_tracked(self):
+    def test_different_worker_counts_independent(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        assert tracker.is_tracked(3) is False
-        tracker.record_task_start(3)
-        assert tracker.is_tracked(3) is True
+        tracker.fill_unknown_usage(worker_ct=2, running_ct=2)
+        assert tracker.should_scale_down(2) is False
+        assert tracker.should_scale_down(3) is True
 
 
 class TestStatusData:
@@ -122,18 +101,11 @@ class TestStatusData:
             assert v == "absent"
 
     def test_mixed_entries(self):
+        """Fill with running_ct=3 to get a mix of blocked and timestamp entries."""
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
         base = 1000.0
         with patch('time.monotonic', return_value=base):
-            tracker.record_task_finish(1)
-        with patch('time.monotonic', return_value=base + 50.0):
-            tracker.record_task_finish(2)
-        tracker.record_task_start(3)
-        with patch('time.monotonic', return_value=base + 90.0):
-            tracker.record_task_finish(4)
-        tracker.record_task_start(5)
-        with patch('time.monotonic', return_value=base + 99.0):
-            tracker.record_task_finish(6)
+            tracker.fill_unknown_usage(worker_ct=6, running_ct=3)
 
         with patch('time.monotonic', return_value=base + 100.0):
             data = tracker.get_status_data(worker_ct=4)
@@ -141,24 +113,23 @@ class TestStatusData:
         assert data["count"] == 6
         # Top 5 highest keys: 6, 5, 4, 3, 2
         assert set(data["top5"].keys()) == {2, 3, 4, 5, 6}
+        assert data["top5"][2] == "blocked"
         assert data["top5"][3] == "blocked"
-        assert data["top5"][5] == "blocked"
-        assert isinstance(data["top5"][2], float)
         assert isinstance(data["top5"][4], float)
+        assert isinstance(data["top5"][5], float)
         assert isinstance(data["top5"][6], float)
         # Near worker_ct=4: keys [2..6]
         near = data["near_worker_ct"]
         assert set(near.keys()) == {2, 3, 4, 5, 6}
-        assert isinstance(near[2], float)
+        assert near[2] == "blocked"
         assert near[3] == "blocked"
         assert isinstance(near[4], float)
-        assert near[5] == "blocked"
+        assert isinstance(near[5], float)
         assert isinstance(near[6], float)
 
     def test_near_worker_ct_absent_keys(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        tracker.record_task_finish(1)
-        tracker.record_task_finish(2)
+        tracker.fill_unknown_usage(worker_ct=2, running_ct=0)
         data = tracker.get_status_data(worker_ct=8)
         near = data["near_worker_ct"]
         assert set(near.keys()) == {6, 7, 8, 9, 10}
@@ -167,7 +138,6 @@ class TestStatusData:
 
     def test_top5_returns_highest_keys(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
-        for i in range(1, 9):
-            tracker.record_task_finish(i)
+        tracker.fill_unknown_usage(worker_ct=8, running_ct=0)
         data = tracker.get_status_data(worker_ct=5)
         assert set(data["top5"].keys()) == {4, 5, 6, 7, 8}
