@@ -100,8 +100,13 @@ async def test_scale_down_with_conflicting_stale_data(pool_factory):
 @pytest.mark.asyncio
 async def test_status_data_includes_last_used_diagnostics(pool_factory):
     """Populate last_used_by_ct with 6 entries mixing sentinels and timestamps.
-    Assert get_status_data() includes count and top5 with correct formatting."""
+    Assert get_status_data() includes count, top5, and near-worker-ct with correct formatting."""
     pool = pool_factory(min_workers=1, max_workers=10)
+
+    # Create 4 ready workers so worker_ct=4
+    for _ in range(4):
+        worker_id = await pool.up()
+        pool.workers.get_by_id(worker_id).status = 'ready'
 
     now = time.monotonic()
     pool.last_used_by_ct = {
@@ -114,7 +119,7 @@ async def test_status_data_includes_last_used_diagnostics(pool_factory):
     }
 
     data = pool.get_status_data()
-    assert data["worker_ct"] == 0  # no workers created, just testing status data formatting
+    assert data["worker_ct"] == 4
     assert data["last_used_by_ct_count"] == 6
 
     top5 = data["last_used_by_ct_top5"]
@@ -129,3 +134,35 @@ async def test_status_data_includes_last_used_diagnostics(pool_factory):
     assert isinstance(top5[2], float)
     assert isinstance(top5[4], float)
     assert isinstance(top5[6], float)
+
+    # Near-worker-ct shows keys [2..6] centered on worker_ct=4
+    near = data["last_used_near_worker_ct"]
+    assert set(near.keys()) == {2, 3, 4, 5, 6}
+    assert isinstance(near[2], float)
+    assert near[3] == "blocked"
+    assert isinstance(near[4], float)
+    assert near[5] == "blocked"
+    assert isinstance(near[6], float)
+
+
+@pytest.mark.asyncio
+async def test_status_data_near_worker_ct_shows_absent_keys(pool_factory):
+    """When last_used_by_ct has no entries near the current worker count,
+    the near-worker-ct summary should show 'absent' for missing keys."""
+    pool = pool_factory(min_workers=1, max_workers=10)
+
+    # Create 8 ready workers so worker_ct=8
+    for _ in range(8):
+        worker_id = await pool.up()
+        pool.workers.get_by_id(worker_id).status = 'ready'
+
+    # Only populate entries far from worker_ct=8
+    now = time.monotonic()
+    pool.last_used_by_ct = {1: now - 100.0, 2: now - 50.0}
+
+    data = pool.get_status_data()
+    near = data["last_used_near_worker_ct"]
+    # Keys [6..10] centered on worker_ct=8, none present in last_used_by_ct
+    assert set(near.keys()) == {6, 7, 8, 9, 10}
+    for k in near:
+        assert near[k] == "absent"

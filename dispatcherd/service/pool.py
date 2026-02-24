@@ -322,27 +322,39 @@ class WorkerPool(WorkerPoolProtocol):
     def received_count(self) -> int:
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
+    def _last_used_summary(self, keys: list[int]) -> dict[int, str | float]:
+        """Return human-readable last_used_by_ct values for the given keys."""
+        now = time.monotonic()
+        result: dict[int, str | float] = {}
+        for k in keys:
+            if k not in self.last_used_by_ct:
+                result[k] = "absent"
+            elif self.last_used_by_ct[k] is _SCALE_DOWN_BLOCKED:
+                result[k] = "blocked"
+            else:
+                result[k] = round(now - self.last_used_by_ct[k], 2)  # type: ignore[operator]
+        return result
+
     def _last_used_top5_summary(self) -> dict[int, str | float]:
         """Return the 5 highest worker-count entries from last_used_by_ct, with human-readable values."""
-        now = time.monotonic()
-        top5: dict[int, str | float] = {}
-        for k in sorted(self.last_used_by_ct, reverse=True)[:5]:
-            v = self.last_used_by_ct[k]
-            if v is _SCALE_DOWN_BLOCKED:
-                top5[k] = "blocked"
-            else:
-                top5[k] = round(now - v, 2)  # type: ignore[operator]
-        return top5
+        return self._last_used_summary(sorted(self.last_used_by_ct, reverse=True)[:5])
+
+    def _last_used_near_worker_ct_summary(self, worker_ct: int) -> dict[int, str | float]:
+        """Return last_used_by_ct values for keys around the current worker count."""
+        keys = list(range(max(worker_ct - 2, 0), worker_ct + 3))
+        return self._last_used_summary(keys)
 
     def get_status_data(self) -> dict[str, Any]:
+        worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         return {
             "next_worker_id": self.next_worker_id,
             "finished_count": self.finished_count,
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
-            "worker_ct": len([worker for worker in self.workers if worker.counts_for_capacity]),
+            "worker_ct": worker_ct,
             "last_used_by_ct_count": len(self.last_used_by_ct),
             "last_used_by_ct_top5": self._last_used_top5_summary(),
+            "last_used_near_worker_ct": self._last_used_near_worker_ct_summary(worker_ct),
         }
 
     async def start_working(self, dispatcher: DispatcherMain) -> None:
@@ -368,7 +380,8 @@ class WorkerPool(WorkerPoolProtocol):
         if worker_ct not in self.last_used_by_ct:
             # Never needed this many workers, scale down immediately
             logger.info(
-                f'No record of needing {worker_ct} workers, allowing scale-down (worker count exceeded tracked usage, top5={self._last_used_top5_summary()})'
+                f'No record of needing {worker_ct} workers, allowing scale-down'
+                f' (worker count exceeded tracked usage, near={self._last_used_near_worker_ct_summary(worker_ct)})'
             )
             return True
         last_used = self.last_used_by_ct[worker_ct]
