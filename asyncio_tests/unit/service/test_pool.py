@@ -8,7 +8,7 @@ import pytest
 
 from dispatcherd.service.asyncio_tasks import SharedAsyncObjects
 from dispatcherd.service.main import DispatcherMain
-from dispatcherd.service.pool import WorkerPool
+from dispatcherd.service.pool import WorkerPool, WorkerUsageTracker
 from dispatcherd.service.process import ProcessManager
 
 
@@ -170,7 +170,7 @@ async def test_scale_down_condition(pool_factory):
 
     # Clear queue and set finished times to long ago
     pool.queuer.queued_messages = []  # queue has been fully worked through, no workers are busy
-    pool.last_used_by_ct = {i: time.monotonic() - 120.0 for i in range(30)}  # all work finished 120 seconds ago
+    pool.usage_tracker._last_used_by_ct = {i: time.monotonic() - 120.0 for i in range(30)}  # all work finished 120 seconds ago
 
     # Outcome of this situation is expected to be a scale-down event
     assert pool.should_scale_down() is True
@@ -197,7 +197,7 @@ async def test_scale_up_worker_should_not_be_immediately_eligible_for_scaledown(
 
     idle_timestamp = time.monotonic() - 120.0
     for i in range(existing_workers + 1):
-        pool.last_used_by_ct[i] = idle_timestamp  # stale timestamp for a previous high-water mark
+        pool.usage_tracker._last_used_by_ct[i] = idle_timestamp  # stale timestamp for a previous high-water mark
 
     # Queue pressure requires more workers, so scaling up should add one.
     pool.queuer.queued_messages = [{'task': 'waiting.task'} for _ in range(existing_workers + 1)]
@@ -237,7 +237,7 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(pool_fac
     worker.current_task = None
 
     # Pretend the worker idled long enough that, without new work, scale-down is allowed.
-    pool.last_used_by_ct[1] = time.monotonic() - 120.0
+    pool.usage_tracker._last_used_by_ct[1] = time.monotonic() - 120.0
 
     lock_states: list[bool] = []
 
@@ -252,9 +252,7 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(pool_fac
 
     # Starting the task should have happened while the lock was held and should block scale-down timers.
     assert lock_states == [True]
-    from dispatcherd.service.pool import _SCALE_DOWN_BLOCKED
-
-    assert pool.last_used_by_ct[1] is _SCALE_DOWN_BLOCKED
+    assert pool.usage_tracker._last_used_by_ct[1] is WorkerUsageTracker._SCALE_DOWN_BLOCKED
     assert pool.should_scale_down() is False
 
 

@@ -22,8 +22,6 @@ from .process import ProcessManager, ProcessProxy
 
 logger = logging.getLogger(__name__)
 
-_SCALE_DOWN_BLOCKED = object()
-
 
 class PoolWorker(HasWakeup, PoolWorkerProtocol):
     def __init__(self, worker_id: int, process: ProcessProxy) -> None:
@@ -231,6 +229,70 @@ class WorkerData(WorkerDataProtocol):
             logger.warning(f'Attempted to move worker_id={worker_id} to end, but worker was already removed from workers dict')
 
 
+class WorkerUsageTracker:
+    """Tracks when the pool last needed N concurrent workers, for scale-down decisions.
+
+    Three states per worker-count key:
+    - absent:  never needed this many → scale down immediately
+    - _SCALE_DOWN_BLOCKED:  actively in use → block scale-down
+    - float timestamp:  last finished at this count → scale down if idle > scaledown_wait
+    """
+
+    _SCALE_DOWN_BLOCKED = object()
+
+    def __init__(self, scaledown_wait: float) -> None:
+        self._last_used_by_ct: dict[int, float | object] = {}
+        self.scaledown_wait = scaledown_wait
+
+    def record_task_start(self, running_ct: int) -> None:
+        self._last_used_by_ct[running_ct] = self._SCALE_DOWN_BLOCKED
+
+    def record_task_finish(self, running_ct: int) -> None:
+        self._last_used_by_ct[running_ct] = time.monotonic()
+
+    def should_scale_down(self, worker_ct: int) -> bool:
+        if worker_ct not in self._last_used_by_ct:
+            logger.info(
+                f'No record of needing {worker_ct} workers, allowing scale-down'
+                f' (worker count exceeded tracked usage, near={self._near_worker_ct_summary(worker_ct)})'
+            )
+            return True
+        last_used = self._last_used_by_ct[worker_ct]
+        if last_used is self._SCALE_DOWN_BLOCKED:
+            return False
+        delta = time.monotonic() - last_used  # type: ignore[operator]
+        return bool(delta > self.scaledown_wait)
+
+    def get_status_data(self, worker_ct: int) -> dict:
+        return {
+            "count": len(self._last_used_by_ct),
+            "top5": self._top5_summary(),
+            "near_worker_ct": self._near_worker_ct_summary(worker_ct),
+        }
+
+    def _format_entries(self, keys: list[int]) -> dict[int, str | float]:
+        """Return human-readable _last_used_by_ct values for the given keys."""
+        now = time.monotonic()
+        result: dict[int, str | float] = {}
+        for k in keys:
+            if k not in self._last_used_by_ct:
+                result[k] = "absent"
+            elif self._last_used_by_ct[k] is self._SCALE_DOWN_BLOCKED:
+                result[k] = "blocked"
+            else:
+                result[k] = round(now - self._last_used_by_ct[k], 2)  # type: ignore[operator]
+        return result
+
+    def _top5_summary(self) -> dict[int, str | float]:
+        """Return the 5 highest worker-count entries from _last_used_by_ct, with human-readable values."""
+        return self._format_entries(sorted(self._last_used_by_ct, reverse=True)[:5])
+
+    def _near_worker_ct_summary(self, worker_ct: int) -> dict[int, str | float]:
+        """Return _last_used_by_ct values for keys around the current worker count."""
+        keys = list(range(max(worker_ct - 2, 0), worker_ct + 3))
+        return self._format_entries(keys)
+
+
 class WorkerPool(WorkerPoolProtocol):
     def __init__(
         self,
@@ -271,19 +333,7 @@ class WorkerPool(WorkerPoolProtocol):
         # the timeout runner keeps its own task
         self.timeout_runner = NextWakeupRunner(self.workers, self.cancel_worker, shared=shared, name='worker_timeout_manager')
 
-        # Track the last time we used X number of workers, like
-        # {
-        #   0: _SCALE_DOWN_BLOCKED,
-        #   1: _SCALE_DOWN_BLOCKED,
-        #   2: <timestamp>
-        # }
-        # where 1 worker is currently in use (_SCALE_DOWN_BLOCKED means
-        # "actively running tasks, block scale-down"), and a task using the
-        # 2nd worker finished at <timestamp>, which is compared against our
-        # scale down wait time.  An absent key means we never needed that
-        # many workers, so scale-down is allowed immediately.
-        self.last_used_by_ct: dict[int, float | object] = {}
-        self.scaledown_wait = scaledown_wait
+        self.usage_tracker = WorkerUsageTracker(scaledown_wait=scaledown_wait)
         self.scaledown_interval = scaledown_interval  # seconds for poll to see if we should retire workers
         self.worker_stop_wait = worker_stop_wait  # seconds to wait for a worker to exit on its own before SIGTERM, SIGKILL
         self.worker_removal_wait = worker_removal_wait  # after worker process exits, seconds to keep its record, for stats
@@ -322,28 +372,6 @@ class WorkerPool(WorkerPoolProtocol):
     def received_count(self) -> int:
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
-    def _last_used_summary(self, keys: list[int]) -> dict[int, str | float]:
-        """Return human-readable last_used_by_ct values for the given keys."""
-        now = time.monotonic()
-        result: dict[int, str | float] = {}
-        for k in keys:
-            if k not in self.last_used_by_ct:
-                result[k] = "absent"
-            elif self.last_used_by_ct[k] is _SCALE_DOWN_BLOCKED:
-                result[k] = "blocked"
-            else:
-                result[k] = round(now - self.last_used_by_ct[k], 2)  # type: ignore[operator]
-        return result
-
-    def _last_used_top5_summary(self) -> dict[int, str | float]:
-        """Return the 5 highest worker-count entries from last_used_by_ct, with human-readable values."""
-        return self._last_used_summary(sorted(self.last_used_by_ct, reverse=True)[:5])
-
-    def _last_used_near_worker_ct_summary(self, worker_ct: int) -> dict[int, str | float]:
-        """Return last_used_by_ct values for keys around the current worker count."""
-        keys = list(range(max(worker_ct - 2, 0), worker_ct + 3))
-        return self._last_used_summary(keys)
-
     def get_status_data(self) -> dict[str, Any]:
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         return {
@@ -352,9 +380,7 @@ class WorkerPool(WorkerPoolProtocol):
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
             "worker_ct": worker_ct,
-            "last_used_by_ct_count": len(self.last_used_by_ct),
-            "last_used_by_ct_top5": self._last_used_top5_summary(),
-            "last_used_near_worker_ct": self._last_used_near_worker_ct_summary(worker_ct),
+            "usage": self.usage_tracker.get_status_data(worker_ct),
         }
 
     async def start_working(self, dispatcher: DispatcherMain) -> None:
@@ -377,20 +403,7 @@ class WorkerPool(WorkerPoolProtocol):
     def should_scale_down(self) -> bool:
         "If True, we have not had enough work lately to justify the number of workers we are running"
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
-        if worker_ct not in self.last_used_by_ct:
-            # Never needed this many workers, scale down immediately
-            logger.info(
-                f'No record of needing {worker_ct} workers, allowing scale-down'
-                f' (worker count exceeded tracked usage, near={self._last_used_near_worker_ct_summary(worker_ct)})'
-            )
-            return True
-        last_used = self.last_used_by_ct[worker_ct]
-        if last_used is _SCALE_DOWN_BLOCKED:
-            # Currently in active use at this capacity, block scale-down
-            return False
-        # Check if idle long enough to justify scale-down
-        delta = time.monotonic() - last_used  # type: ignore[operator]
-        return bool(delta > self.scaledown_wait)
+        return self.usage_tracker.should_scale_down(worker_ct)
 
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions
@@ -650,7 +663,7 @@ class WorkerPool(WorkerPoolProtocol):
         if 'timeout' in message:
             await self.timeout_runner.kick()  # kick timeout task to set wakeup
         running_ct = self.get_running_count()
-        self.last_used_by_ct[running_ct] = _SCALE_DOWN_BLOCKED  # block scale down of this amount
+        self.usage_tracker.record_task_start(running_ct)
 
     async def dispatch_task(self, message: dict) -> None:
         uuid = message.get("uuid", "<unknown>")
@@ -703,7 +716,7 @@ class WorkerPool(WorkerPoolProtocol):
         logger.debug(msg)
 
         running_ct = self.get_running_count()
-        self.last_used_by_ct[running_ct] = time.monotonic()  # scale down may be allowed, clock starting now
+        self.usage_tracker.record_task_finish(running_ct)
 
         is_stopping = message.get('is_stopping', False)
 
