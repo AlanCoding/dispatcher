@@ -363,6 +363,7 @@ class WorkerPool(WorkerPoolProtocol):
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         if worker_ct not in self.last_used_by_ct:
             # Never needed this many workers, scale down immediately
+            logger.info(f'No record of needing {worker_ct} workers, allowing scale-down (worker count exceeded tracked usage)')
             return True
         last_used = self.last_used_by_ct[worker_ct]
         if last_used is _SCALE_DOWN_BLOCKED:
