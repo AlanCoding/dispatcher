@@ -236,7 +236,7 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(fake_poo
     pool = fake_pool_factory(min_workers=1, max_workers=1)
     worker_id = await pool.up()
     worker = pool.workers.get_by_id(worker_id)
-    worker.status = 'ready'
+    assert worker.status == 'ready'
     worker.current_task = None
 
     # Pretend the worker idled long enough that, without new work, scale-down is allowed.

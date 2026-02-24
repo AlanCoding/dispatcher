@@ -1,6 +1,5 @@
 import queue
 from typing import Callable
-from unittest import mock
 
 import pytest
 

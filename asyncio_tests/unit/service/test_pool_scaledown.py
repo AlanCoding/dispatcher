@@ -15,7 +15,7 @@ async def test_scale_down_when_never_needed_this_many_workers(fake_pool_factory)
     # Create 3 ready idle workers
     for _ in range(3):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
     # Only have entries for counts 1 and 2, NOT 3
@@ -43,7 +43,7 @@ async def test_scale_down_blocked_by_sentinel(fake_pool_factory):
 
     for _ in range(3):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     pool.usage_tracker.record_task_start(3)
 
@@ -59,7 +59,7 @@ async def test_scale_down_cascade_through_gaps(fake_pool_factory):
 
     for _ in range(10):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
     # Only populate entries for counts 1-5
@@ -94,7 +94,7 @@ async def test_scale_down_with_conflicting_stale_data(fake_pool_factory):
 
     for _ in range(5):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     # State 1: sentinel blocks scale-down
     pool.usage_tracker.record_task_start(5)
@@ -129,7 +129,7 @@ async def test_status_data_includes_last_used_diagnostics(fake_pool_factory):
     # Create 4 ready workers so worker_ct=4
     for _ in range(4):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
     with patch('time.monotonic', return_value=base):
@@ -181,7 +181,7 @@ async def test_status_data_near_worker_ct_shows_absent_keys(fake_pool_factory):
     # Create 8 ready workers so worker_ct=8
     for _ in range(8):
         worker_id = await pool.up()
-        pool.workers.get_by_id(worker_id).status = 'ready'
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     # Only populate entries far from worker_ct=8
     pool.usage_tracker.record_task_finish(1)
