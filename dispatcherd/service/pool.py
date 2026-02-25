@@ -328,7 +328,7 @@ class WorkerUsageTracker:
 
     def _near_worker_ct_summary(self, worker_ct: int) -> dict[int, str | float]:
         """Return _last_used_by_ct values for keys around the current worker count."""
-        keys = list(range(max(worker_ct - 2, 0), worker_ct + 3))
+        keys = list(range(max(worker_ct - 2, 1), worker_ct + 3))
         return self._format_entries(keys)
 
 
