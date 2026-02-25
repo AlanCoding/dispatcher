@@ -178,6 +178,7 @@ async def test_status_data_includes_usage_diagnostics(fake_pool_factory):
         data = pool.get_status_data()
 
     assert data["worker_ct"] == 4
+    assert data["running_ct"] == 2
     assert data["usage"]["count"] == 4
 
     # Near worker_ct=4: keys [2..6]

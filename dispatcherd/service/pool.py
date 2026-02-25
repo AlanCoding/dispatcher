@@ -423,6 +423,8 @@ class WorkerPool(WorkerPoolProtocol):
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
             "worker_ct": worker_ct,
+            "running_ct": self.get_running_count(),
+            "active_task_ct": self.active_task_ct(),
             "usage": self.usage_tracker.get_status_data(worker_ct),
         }
 
@@ -450,9 +452,9 @@ class WorkerPool(WorkerPoolProtocol):
         See also process_finished, which records usage under the same lock.
         """
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
-        running_ct = self.get_running_count()
-        self.usage_tracker.fill_unknown_usage(worker_ct, running_ct)
-        return self.usage_tracker.should_scale_down(worker_ct, running_ct)
+        demand_ct = self.active_task_ct()
+        self.usage_tracker.fill_unknown_usage(worker_ct, demand_ct)
+        return self.usage_tracker.should_scale_down(worker_ct, demand_ct)
 
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions
@@ -781,10 +783,9 @@ class WorkerPool(WorkerPoolProtocol):
             worker.mark_finished_task()
             self.workers.move_to_end(worker.worker_id)
             # Record usage after mark_finished_task clears current_task,
-            # so get_running_count reflects the post-finish state.
+            # so active_task_ct reflects the post-finish state.
             # Must be under management_lock — see also scale_workers and should_scale_down.
-            running_ct = self.get_running_count()
-            self.usage_tracker.record_task_finish(running_ct)
+            self.usage_tracker.record_task_finish(self.active_task_ct())
 
         if not self.queuer.queued_messages and all(worker.current_task is None for worker in self.workers):
             self.events.work_cleared.set()
