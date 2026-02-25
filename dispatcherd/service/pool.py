@@ -483,13 +483,16 @@ class WorkerPool(WorkerPoolProtocol):
             # Scale down above or to MIN, because surplus of workers have done nothing useful in <cutoff> time
             async with self.workers.management_lock:
                 # should_scale_down mutates usage_tracker — must be under lock (see also process_finished)
-                if self.should_scale_down():
-                    for worker in available_workers:
-                        if worker.current_task is None:
+                # Retire as many idle workers as should_scale_down() allows in one tick
+                while len([w for w in self.workers if w.counts_for_capacity]) > self.min_workers and self.should_scale_down():
+                    for worker in self.workers:
+                        if worker.counts_for_capacity and worker.current_task is None:
                             logger.info(f'Scaling down worker id={worker.worker_id} (prior ct={worker_ct}) due to demand')
                             await worker.signal_stop()
                             changed_ct -= 1
                             break
+                    else:
+                        break
 
         logger.debug(f'Ran scale_workers worker_ct={worker_ct}, active_task_ct={active_task_ct}, changed {changed_ct}')
         return changed_ct

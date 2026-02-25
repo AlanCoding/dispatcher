@@ -1,6 +1,5 @@
 # Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 # See also: tests/unit/service/test_usage_tracker.py for synchronous unit tests of WorkerUsageTracker
-import time
 from unittest.mock import patch
 
 import pytest
@@ -80,16 +79,13 @@ async def test_scale_down_cascade_to_min_workers(fake_pool_factory):
     with patch('time.monotonic', return_value=base):
         pool.should_scale_down()
 
-    # After scaledown_wait, cascade scales all the way down
+    # After scaledown_wait, a single scale_workers call retires all surplus
     with patch('time.monotonic', return_value=base + 100.0):
-        for _ in range(20):  # enough iterations to converge
-            await pool.scale_workers()
-            for w in pool.workers:
-                if w.status == 'stopping':
-                    w.status = 'retired'
-                    w.retired_at = time.monotonic()
+        await pool.scale_workers()
 
+    stopping = [w for w in pool.workers if w.status == 'stopping']
     capacity_workers = [w for w in pool.workers if w.counts_for_capacity]
+    assert len(stopping) == 9
     assert len(capacity_workers) == 1
 
 
@@ -120,8 +116,8 @@ async def test_scale_down_respects_active_load(fake_pool_factory):
         await pool.scale_workers()
 
     statuses = [w.status for w in pool.workers]
-    assert statuses.count('stopping') == 1
-    assert statuses.count('ready') == 4
+    assert statuses.count('stopping') == 2
+    assert statuses.count('ready') == 3
 
 
 @pytest.mark.asyncio

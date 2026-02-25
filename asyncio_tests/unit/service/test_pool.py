@@ -179,9 +179,11 @@ async def test_scale_down_condition(fake_pool_factory):
     with mock.patch('time.monotonic', return_value=base + 100.0):
         assert pool.should_scale_down() is True
         await pool.scale_workers()
-    # Same number of workers but one worker has been sent a stop signal
+    # Same number of workers but all surplus workers have been sent a stop signal
     assert len(pool.workers) == 3
-    assert set([worker.status for worker in pool.workers]) == {'ready', 'stopping'}
+    statuses = [worker.status for worker in pool.workers]
+    assert statuses.count('stopping') == 2
+    assert statuses.count('ready') == 1
 
 
 @pytest.mark.asyncio
