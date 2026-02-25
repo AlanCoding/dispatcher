@@ -135,6 +135,40 @@ class TestFillAndScaleDown:
         assert tracker.should_scale_down(2) is False
         assert tracker.should_scale_down(3) is True
 
+    def test_scaledown_reserve_blocks_within_buffer(self):
+        """With scaledown_reserve=2, worker_ct 6 with running_ct 4 should not scale down (6 <= 4+2)."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0, scaledown_reserve=2)
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=6, running_ct=4)
+        # After scaledown_wait, worker_ct=6 is within reserve (6 <= 4+2)
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(6, running_ct=4) is False
+        # Absent key still returns True (absent overrides reserve)
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(7, running_ct=4) is True
+
+    def test_scaledown_reserve_allows_beyond_buffer(self):
+        """With scaledown_reserve=2, worker_ct above running_ct+reserve can scale down."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0, scaledown_reserve=2)
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=8, running_ct=4)
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(8, running_ct=4) is True  # 8 > 4+2
+            assert tracker.should_scale_down(7, running_ct=4) is True  # 7 > 4+2
+            assert tracker.should_scale_down(6, running_ct=4) is False  # 6 <= 4+2
+
+    def test_scaledown_reserve_zero_default(self):
+        """With default scaledown_reserve=0, behavior matches existing tests."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
+        assert tracker.scaledown_reserve == 0
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=3, running_ct=0)
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(3) is True
+
     def test_stale_blocked_entries_above_worker_ct_downgraded(self):
         """Keys above worker_ct left over from a previously higher worker count
         should be downgraded from blocked to a timestamp so they age out."""

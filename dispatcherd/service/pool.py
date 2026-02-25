@@ -240,9 +240,10 @@ class WorkerUsageTracker:
 
     _SCALE_DOWN_BLOCKED = object()
 
-    def __init__(self, scaledown_wait: float) -> None:
+    def __init__(self, scaledown_wait: float, scaledown_reserve: int = 0) -> None:
         self._last_used_by_ct: dict[int, float | object] = {}
         self.scaledown_wait = scaledown_wait
+        self.scaledown_reserve = scaledown_reserve
 
     def record_task_finish(self, running_ct: int) -> None:
         """Record a timestamp when a task finishes at the given running count.
@@ -287,7 +288,7 @@ class WorkerUsageTracker:
             if ct > worker_ct and value is self._SCALE_DOWN_BLOCKED:
                 self._last_used_by_ct[ct] = now
 
-    def should_scale_down(self, worker_ct: int) -> bool:
+    def should_scale_down(self, worker_ct: int, running_ct: int = 0) -> bool:
         if worker_ct not in self._last_used_by_ct:
             logger.warning(
                 f'No record of needing {worker_ct} workers, allowing scale-down'
@@ -296,6 +297,8 @@ class WorkerUsageTracker:
             return True
         last_used = self._last_used_by_ct[worker_ct]
         if last_used is self._SCALE_DOWN_BLOCKED:
+            return False
+        if self.scaledown_reserve and worker_ct <= running_ct + self.scaledown_reserve:
             return False
         delta = time.monotonic() - last_used  # type: ignore[operator]
         return bool(delta > self.scaledown_wait)
@@ -341,6 +344,7 @@ class WorkerPool(WorkerPoolProtocol):
         max_workers: int | None = None,
         scaledown_wait: float = 15.0,
         scaledown_interval: float = 15.0,
+        scaledown_reserve: int = 0,
         worker_stop_wait: float = 30.0,
         worker_removal_wait: float = 30.0,
         worker_max_lifetime_seconds: float | None = 4 * 60 * 60,
@@ -372,7 +376,7 @@ class WorkerPool(WorkerPoolProtocol):
         # the timeout runner keeps its own task
         self.timeout_runner = NextWakeupRunner(self.workers, self.cancel_worker, shared=shared, name='worker_timeout_manager')
 
-        self.usage_tracker = WorkerUsageTracker(scaledown_wait=scaledown_wait)
+        self.usage_tracker = WorkerUsageTracker(scaledown_wait=scaledown_wait, scaledown_reserve=scaledown_reserve)
         self.scaledown_interval = scaledown_interval  # seconds for poll to see if we should retire workers
         self.worker_stop_wait = worker_stop_wait  # seconds to wait for a worker to exit on its own before SIGTERM, SIGKILL
         self.worker_removal_wait = worker_removal_wait  # after worker process exits, seconds to keep its record, for stats
@@ -448,7 +452,7 @@ class WorkerPool(WorkerPoolProtocol):
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         running_ct = self.get_running_count()
         self.usage_tracker.fill_unknown_usage(worker_ct, running_ct)
-        return self.usage_tracker.should_scale_down(worker_ct)
+        return self.usage_tracker.should_scale_down(worker_ct, running_ct)
 
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions

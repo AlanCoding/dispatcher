@@ -210,3 +210,35 @@ async def test_status_data_near_worker_ct_shows_absent_keys(fake_pool_factory):
     assert set(near.keys()) == {6, 7, 8, 9, 10}
     for k in near:
         assert near[k] == "absent"
+
+
+@pytest.mark.asyncio
+async def test_scaledown_reserve_keeps_surplus(fake_pool_factory):
+    """6 workers, 2 busy, scaledown_reserve=2, min_workers=1.
+    After scaledown_wait, scale_workers should stop 2 workers
+    (down to 4 = 2 demand + 2 reserve), not all the way to 1."""
+    pool = fake_pool_factory(min_workers=1, max_workers=10, scaledown_reserve=2)
+
+    workers = []
+    for _ in range(6):
+        worker_id = await pool.up()
+        workers.append(pool.workers.get_by_id(worker_id))
+        assert workers[-1].status == 'ready'
+
+    # Give 2 workers tasks
+    for i in range(2):
+        await workers[i].start_task({'task': f'busy-{i}'})
+
+    base = 1000.0
+    # First tick: keys 1-2 blocked, keys 3-6 idle timestamps
+    with patch('time.monotonic', return_value=base):
+        assert pool.should_scale_down() is False
+
+    # After scaledown_wait: surplus above reserve aged out
+    with patch('time.monotonic', return_value=base + 100.0):
+        assert pool.should_scale_down() is True
+        await pool.scale_workers()
+
+    statuses = [w.status for w in pool.workers]
+    assert statuses.count('stopping') == 2  # scaled from 6 to 4
+    assert statuses.count('ready') == 4  # 2 busy + 2 reserve
