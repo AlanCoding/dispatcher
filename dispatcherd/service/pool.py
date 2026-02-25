@@ -271,12 +271,20 @@ class WorkerUsageTracker:
           after scaledown_wait).
         - Keys above running_ct that already have a timestamp are left
           alone so they continue aging toward scaledown_wait.
+
+        Keys above worker_ct that are stale blocked entries (left over from
+        a previously higher worker count) are downgraded to the current
+        timestamp so they age out naturally instead of showing as blocked
+        in status output forever.
         """
         now = time.monotonic()
         for ct in range(1, worker_ct + 1):
             if ct <= running_ct:
                 self._last_used_by_ct[ct] = self._SCALE_DOWN_BLOCKED
             elif ct not in self._last_used_by_ct or self._last_used_by_ct[ct] is self._SCALE_DOWN_BLOCKED:
+                self._last_used_by_ct[ct] = now
+        for ct, value in self._last_used_by_ct.items():
+            if ct > worker_ct and value is self._SCALE_DOWN_BLOCKED:
                 self._last_used_by_ct[ct] = now
 
     def should_scale_down(self, worker_ct: int) -> bool:

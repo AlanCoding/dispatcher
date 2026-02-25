@@ -135,6 +135,26 @@ class TestFillAndScaleDown:
         assert tracker.should_scale_down(2) is False
         assert tracker.should_scale_down(3) is True
 
+    def test_stale_blocked_entries_above_worker_ct_downgraded(self):
+        """Keys above worker_ct left over from a previously higher worker count
+        should be downgraded from blocked to a timestamp so they age out."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
+        base = 1000.0
+        # Pool was at 5 workers, all busy
+        with patch('time.monotonic', return_value=base):
+            tracker.fill_unknown_usage(worker_ct=5, running_ct=5)
+        # All 5 keys blocked
+        for k in range(1, 6):
+            assert tracker.should_scale_down(k) is False
+
+        # Pool scaled down to 2 workers, none busy
+        with patch('time.monotonic', return_value=base + 1.0):
+            tracker.fill_unknown_usage(worker_ct=2, running_ct=0)
+        # Keys 3-5 were above worker_ct and stale blocked, now timestamps
+        with patch('time.monotonic', return_value=base + 1.0):
+            for k in range(3, 6):
+                assert tracker._last_used_by_ct[k] is not tracker._SCALE_DOWN_BLOCKED
+
 
 class TestStatusData:
     def test_empty_tracker(self):
