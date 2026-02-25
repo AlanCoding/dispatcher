@@ -244,13 +244,24 @@ class WorkerUsageTracker:
         self._last_used_by_ct: dict[int, float | object] = {}
         self.scaledown_wait = scaledown_wait
 
+    def record_task_finish(self, running_ct: int) -> None:
+        """Record a timestamp when a task finishes at the given running count.
+
+        Called from the task-completion hot path.  This is the only per-task
+        hook — there is no corresponding record_task_start because blocking
+        is handled entirely by the periodic fill_unknown_usage.  Recording
+        the finish timestamp allows scale-down to proceed at the earliest
+        possible moment rather than waiting for the next periodic tick.
+        """
+        self._last_used_by_ct[running_ct] = time.monotonic()
+
     def fill_unknown_usage(self, worker_ct: int, running_ct: int) -> None:
         """Update the tracker with the current observed state of the pool.
 
-        Called on every periodic scale-down check.  This is the sole input
-        mechanism for the tracker — there are no per-task hooks.  Avoiding
-        per-task recording eliminates a class of bugs where sentinels set
-        on the hot path are never cleared due to timing or count mismatches.
+        Called on every periodic scale-down check.  This is the primary input
+        mechanism for blocking scale-down — keys at or below the current load
+        are marked as blocked.  record_task_finish provides the complementary
+        timestamp recording on the hot path for timely scale-down.
 
         For each worker-count key up to worker_ct:
         - Keys at or below running_ct are set to blocked (actively in use),
@@ -421,7 +432,11 @@ class WorkerPool(WorkerPoolProtocol):
         return ct
 
     def should_scale_down(self) -> bool:
-        "If True, we have not had enough work lately to justify the number of workers we are running"
+        """If True, we have not had enough work lately to justify the number of workers we are running.
+
+        Must be called under management_lock — mutates usage_tracker state.
+        See also process_finished, which records usage under the same lock.
+        """
         worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         running_ct = self.get_running_count()
         self.usage_tracker.fill_unknown_usage(worker_ct, running_ct)
@@ -467,6 +482,7 @@ class WorkerPool(WorkerPoolProtocol):
         elif worker_ct > self.min_workers:
             # Scale down above or to MIN, because surplus of workers have done nothing useful in <cutoff> time
             async with self.workers.management_lock:
+                # should_scale_down mutates usage_tracker — must be under lock (see also process_finished)
                 if self.should_scale_down():
                     for worker in available_workers:
                         if worker.current_task is None:
@@ -749,6 +765,11 @@ class WorkerPool(WorkerPoolProtocol):
                     worker.stopping_at = time.monotonic()
             worker.mark_finished_task()
             self.workers.move_to_end(worker.worker_id)
+            # Record usage after mark_finished_task clears current_task,
+            # so get_running_count reflects the post-finish state.
+            # Must be under management_lock — see also scale_workers and should_scale_down.
+            running_ct = self.get_running_count()
+            self.usage_tracker.record_task_finish(running_ct)
 
         if not self.queuer.queued_messages and all(worker.current_task is None for worker in self.workers):
             self.events.work_cleared.set()

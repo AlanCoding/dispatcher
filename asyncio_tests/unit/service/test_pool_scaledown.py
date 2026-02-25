@@ -44,6 +44,28 @@ async def test_scale_down_blocked_by_active_work(fake_pool_factory):
 
 
 @pytest.mark.asyncio
+async def test_task_finish_enables_timely_scale_down(fake_pool_factory):
+    """record_task_finish records a timestamp on the hot path, so scale-down
+    can proceed at the earliest possible moment without waiting for the next
+    periodic fill tick."""
+    pool = fake_pool_factory(min_workers=1, max_workers=10)
+
+    for _ in range(3):
+        worker_id = await pool.up()
+        assert pool.workers.get_by_id(worker_id).status == 'ready'
+
+    base = 1000.0
+    # Simulate a task finishing — sets timestamp at running_ct
+    with patch('time.monotonic', return_value=base):
+        pool.usage_tracker.record_task_finish(3)
+
+    # Periodic fill hasn't run yet, but key 3 already has a timestamp
+    # After scaledown_wait, scale-down proceeds without needing a prior fill tick
+    with patch('time.monotonic', return_value=base + 100.0):
+        assert pool.should_scale_down() is True
+
+
+@pytest.mark.asyncio
 async def test_scale_down_cascade_to_min_workers(fake_pool_factory):
     """10 idle workers.  After two ticks, repeatedly calling scale_workers()
     should scale all the way down to min_workers=1."""

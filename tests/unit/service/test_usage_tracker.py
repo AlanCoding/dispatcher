@@ -5,6 +5,52 @@ from unittest.mock import patch
 from dispatcherd.service.pool import WorkerUsageTracker
 
 
+class TestRecordTaskFinish:
+    def test_recent_finish_blocks_scale_down(self):
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        tracker.record_task_finish(3)
+        assert tracker.should_scale_down(3) is False
+
+    def test_old_finish_allows_scale_down(self):
+        tracker = WorkerUsageTracker(scaledown_wait=15.0)
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.record_task_finish(3)
+        with patch('time.monotonic', return_value=base + 120.0):
+            assert tracker.should_scale_down(3) is True
+
+    def test_finish_overwrites_blocked_entry(self):
+        """record_task_finish replaces a blocked sentinel with a timestamp."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
+        tracker.fill_unknown_usage(worker_ct=3, running_ct=3)
+        assert tracker.should_scale_down(3) is False
+        # Task finishes — replaces blocked with timestamp
+        base = 1000.0
+        with patch('time.monotonic', return_value=base):
+            tracker.record_task_finish(3)
+        # Still blocked by recency
+        with patch('time.monotonic', return_value=base):
+            assert tracker.should_scale_down(3) is False
+        # After scaledown_wait
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(3) is True
+
+    def test_finish_enables_earlier_scale_down_than_periodic_fill(self):
+        """record_task_finish sets the timestamp immediately, so scale-down
+        can happen sooner than waiting for the next periodic fill."""
+        tracker = WorkerUsageTracker(scaledown_wait=10.0)
+        base = 1000.0
+        # Task finishes at time=base, setting timestamp for key 5
+        with patch('time.monotonic', return_value=base):
+            tracker.record_task_finish(5)
+        # Periodic fill at base+5 — should NOT overwrite the older timestamp
+        with patch('time.monotonic', return_value=base + 5.0):
+            tracker.fill_unknown_usage(worker_ct=5, running_ct=0)
+        # At base+11, the record_task_finish timestamp is old enough
+        with patch('time.monotonic', return_value=base + 11.0):
+            assert tracker.should_scale_down(5) is True
+
+
 class TestFillAndScaleDown:
     def test_absent_key_allows_scale_down(self):
         tracker = WorkerUsageTracker(scaledown_wait=15.0)
