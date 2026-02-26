@@ -445,17 +445,6 @@ class WorkerPool(WorkerPoolProtocol):
                 ct += 1
         return ct
 
-    def should_scale_down(self) -> bool:
-        """If True, we have not had enough work lately to justify the number of workers we are running.
-
-        Must be called under management_lock — mutates usage_tracker state.
-        See also process_finished, which records usage under the same lock.
-        """
-        worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
-        demand_ct = self.active_task_ct()
-        self.usage_tracker.fill_unknown_usage(worker_ct, demand_ct)
-        return self.usage_tracker.should_scale_down(worker_ct, demand_ct)
-
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions
 
@@ -494,21 +483,40 @@ class WorkerPool(WorkerPoolProtocol):
             pass
 
         elif worker_ct > self.min_workers:
-            # Scale down above or to MIN, because surplus of workers have done nothing useful in <cutoff> time
-            async with self.workers.management_lock:
-                # should_scale_down mutates usage_tracker — must be under lock (see also process_finished)
-                # Retire as many idle workers as should_scale_down() allows in one tick
-                while len([w for w in self.workers if w.counts_for_capacity]) > self.min_workers and self.should_scale_down():
-                    for worker in self.workers:
-                        if worker.counts_for_capacity and worker.current_task is None:
-                            logger.info(f'Scaling down worker id={worker.worker_id} (prior ct={worker_ct}) due to demand')
-                            await worker.signal_stop()
-                            changed_ct -= 1
-                            break
-                    else:
-                        break
+            changed_ct = await self._scale_down(worker_ct)
 
         logger.debug(f'Ran scale_workers worker_ct={worker_ct}, active_task_ct={active_task_ct}, changed {changed_ct}')
+        return changed_ct
+
+    async def _scale_down(self, prior_worker_ct: int) -> int:
+        """Retire idle workers down to demand + reserve, respecting min_workers.
+
+        Returns a negative count of workers that were sent stop signals.
+        Must not be called if worker_ct <= min_workers.
+        """
+        max_scaledown_per_tick = 300
+        changed_ct = 0
+        async with self.workers.management_lock:
+            # fill_unknown_usage mutates usage_tracker — must be under lock (see also process_finished)
+            # Fill once; demand_ct does not change under the lock
+            demand_ct = self.active_task_ct()
+            capacity_ct = len([w for w in self.workers if w.counts_for_capacity])
+            self.usage_tracker.fill_unknown_usage(capacity_ct, demand_ct)
+            scaled = 0
+            while capacity_ct > self.min_workers and self.usage_tracker.should_scale_down(capacity_ct, demand_ct):
+                if scaled >= max_scaledown_per_tick:
+                    logger.warning(f'Reached scale-down limit of {max_scaledown_per_tick} in a single tick, deferring remaining to next tick')
+                    break
+                for worker in self.workers:
+                    if worker.counts_for_capacity and worker.current_task is None:
+                        logger.info(f'Scaling down worker id={worker.worker_id} (prior ct={prior_worker_ct}) due to demand')
+                        await worker.signal_stop()
+                        changed_ct -= 1
+                        capacity_ct -= 1
+                        scaled += 1
+                        break
+                else:
+                    break
         return changed_ct
 
     async def manage_new_workers(self) -> None:

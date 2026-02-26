@@ -8,6 +8,14 @@ from dispatcherd.service.pool import WorkerPool
 from dispatcherd.service.process import ProcessManager
 
 
+def fill_and_check_scale_down(pool: WorkerPool) -> bool:
+    """Test helper: fill the usage tracker with current pool state and check if scale-down is warranted."""
+    worker_ct = len([w for w in pool.workers if w.counts_for_capacity])
+    demand_ct = pool.active_task_ct()
+    pool.usage_tracker.fill_unknown_usage(worker_ct, demand_ct)
+    return pool.usage_tracker.should_scale_down(worker_ct, demand_ct)
+
+
 class FakeProcess:
     """A stand-in for ProcessProxy that requires no multiprocessing resources.
 

@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+from asyncio_tests.unit.service.conftest import fill_and_check_scale_down
+
 
 @pytest.mark.asyncio
 async def test_scale_down_idle_workers(fake_pool_factory):
@@ -18,11 +20,11 @@ async def test_scale_down_idle_workers(fake_pool_factory):
     base = 1000.0
     # First tick: fills keys 1-3 as idle timestamps — too recent to scale down
     with patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False
+        assert fill_and_check_scale_down(pool) is False
 
     # Second tick after scaledown_wait: timestamps are old enough
     with patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
         await pool.scale_workers()
     statuses = [w.status for w in pool.workers]
     assert 'stopping' in statuses
@@ -39,7 +41,7 @@ async def test_scale_down_blocked_by_active_work(fake_pool_factory):
         assert worker.status == 'ready'
         await worker.start_task({'task': 'busy'})
 
-    assert pool.should_scale_down() is False
+    assert fill_and_check_scale_down(pool) is False
 
 
 @pytest.mark.asyncio
@@ -61,7 +63,7 @@ async def test_task_finish_enables_timely_scale_down(fake_pool_factory):
     # Periodic fill hasn't run yet, but key 3 already has a timestamp
     # After scaledown_wait, scale-down proceeds without needing a prior fill tick
     with patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
 
 
 @pytest.mark.asyncio
@@ -77,7 +79,7 @@ async def test_scale_down_cascade_to_min_workers(fake_pool_factory):
     base = 1000.0
     # First tick: fill all keys as idle
     with patch('time.monotonic', return_value=base):
-        pool.should_scale_down()
+        fill_and_check_scale_down(pool)
 
     # After scaledown_wait, a single scale_workers call retires all surplus
     with patch('time.monotonic', return_value=base + 100.0):
@@ -108,11 +110,11 @@ async def test_scale_down_respects_active_load(fake_pool_factory):
     base = 1000.0
     # First tick: keys 1-3 blocked, keys 4-5 idle timestamps
     with patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False
+        assert fill_and_check_scale_down(pool) is False
 
     # After scaledown_wait: surplus keys aged out, scale down from 5
     with patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
         await pool.scale_workers()
 
     statuses = [w.status for w in pool.workers]
@@ -138,7 +140,7 @@ async def test_blocked_entries_clear_when_load_drops(fake_pool_factory):
 
     base = 1000.0
     with patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False  # all blocked
+        assert fill_and_check_scale_down(pool) is False  # all blocked
 
     # Tasks finish — clear current_task to simulate completion
     for w in workers:
@@ -146,11 +148,11 @@ async def test_blocked_entries_clear_when_load_drops(fake_pool_factory):
 
     # Next tick: running_ct=0, previously blocked keys become timestamps
     with patch('time.monotonic', return_value=base + 1.0):
-        assert pool.should_scale_down() is False  # timestamps too recent
+        assert fill_and_check_scale_down(pool) is False  # timestamps too recent
 
     # After scaledown_wait
     with patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
 
 
 @pytest.mark.asyncio
@@ -172,7 +174,7 @@ async def test_status_data_includes_usage_diagnostics(fake_pool_factory):
     base = 1000.0
     # Fill: running_ct=2, so keys 1-2 blocked, keys 3-4 idle
     with patch('time.monotonic', return_value=base):
-        pool.should_scale_down()
+        fill_and_check_scale_down(pool)
 
     with patch('time.monotonic', return_value=base + 10.0):
         data = pool.get_status_data()
@@ -233,13 +235,35 @@ async def test_scaledown_reserve_keeps_surplus(fake_pool_factory):
     base = 1000.0
     # First tick: keys 1-2 blocked, keys 3-6 idle timestamps
     with patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False
+        assert fill_and_check_scale_down(pool) is False
 
     # After scaledown_wait: surplus above reserve aged out
     with patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
         await pool.scale_workers()
 
     statuses = [w.status for w in pool.workers]
     assert statuses.count('stopping') == 2  # scaled from 6 to 4
     assert statuses.count('ready') == 4  # 2 busy + 2 reserve
+
+
+@pytest.mark.asyncio
+async def test_scaledown_limit_per_tick(fake_pool_factory):
+    """Scale-down is capped at 300 per tick to guard against runaway loops.
+    With 350 idle workers and a limit of 300, only 300 should be stopped in one tick."""
+    pool = fake_pool_factory(min_workers=1, max_workers=400)
+
+    for _ in range(350):
+        await pool.up()
+
+    base = 1000.0
+    with patch('time.monotonic', return_value=base):
+        fill_and_check_scale_down(pool)
+
+    with patch('time.monotonic', return_value=base + 100.0):
+        await pool.scale_workers()
+
+    stopping = [w for w in pool.workers if w.status == 'stopping']
+    capacity = [w for w in pool.workers if w.counts_for_capacity]
+    assert len(stopping) == 300
+    assert len(capacity) == 50

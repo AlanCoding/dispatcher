@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 
+from asyncio_tests.unit.service.conftest import fill_and_check_scale_down
 from dispatcherd.service.asyncio_tasks import SharedAsyncObjects
 from dispatcherd.service.main import DispatcherMain
 from dispatcherd.service.pool import WorkerPool
@@ -173,11 +174,11 @@ async def test_scale_down_condition(fake_pool_factory):
     base = 1000.0
     # First tick fills tracker with idle timestamps
     with mock.patch('time.monotonic', return_value=base):
-        assert pool.should_scale_down() is False
+        assert fill_and_check_scale_down(pool) is False
 
     # After scaledown_wait, scale-down proceeds
     with mock.patch('time.monotonic', return_value=base + 100.0):
-        assert pool.should_scale_down() is True
+        assert fill_and_check_scale_down(pool) is True
         await pool.scale_workers()
     # Same number of workers but all surplus workers have been sent a stop signal
     assert len(pool.workers) == 3
@@ -256,8 +257,8 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(fake_poo
 
     # Starting the task should have happened while the lock was held.
     assert lock_states == [True]
-    # Worker is busy (current_task set), so should_scale_down fills key 1 as blocked.
-    assert pool.should_scale_down() is False
+    # Worker is busy (current_task set), so fill_unknown_usage marks key 1 as blocked.
+    assert fill_and_check_scale_down(pool) is False
 
 
 @pytest.mark.asyncio
