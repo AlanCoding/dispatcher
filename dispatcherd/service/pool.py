@@ -229,6 +229,96 @@ class WorkerData(WorkerDataProtocol):
             logger.warning(f'Attempted to move worker_id={worker_id} to end, but worker was already removed from workers dict')
 
 
+class WorkerUsageTracker:
+    """Scale-down memory keyed by worker count.
+
+    Each key is one of:
+    - absent: never observed as needed
+    - _SCALE_DOWN_BLOCKED: currently at or below demand
+    - float timestamp: last time that level was released
+    """
+
+    _SCALE_DOWN_BLOCKED = object()
+
+    def __init__(self, scaledown_wait: float, scaledown_reserve: int = 0) -> None:
+        self._last_used_by_ct: dict[int, float | object] = {}
+        self.scaledown_wait = scaledown_wait
+        self.scaledown_reserve = scaledown_reserve
+
+    def record_task_finish(self, demand_ct: int) -> None:
+        """Mark a just-released demand level with a timestamp.
+
+        This hot-path write avoids waiting for the next periodic fill cycle.
+        """
+        self._last_used_by_ct[demand_ct] = time.monotonic()
+
+    def fill_unknown_usage(self, worker_ct: int, demand_ct: int) -> None:
+        """Apply current pool state to the tracker.
+
+        Principles:
+        - Counts `<= demand_ct` are blocked.
+        - Idle surplus counts (`demand_ct < ct <= worker_ct`) get timestamps
+          only when first seen or when transitioning from blocked.
+        - Existing idle timestamps keep aging.
+        """
+        now = time.monotonic()
+        for ct in range(1, worker_ct + 1):
+            if ct <= demand_ct:
+                self._last_used_by_ct[ct] = self._SCALE_DOWN_BLOCKED
+            elif ct not in self._last_used_by_ct or self._last_used_by_ct[ct] is self._SCALE_DOWN_BLOCKED:
+                self._last_used_by_ct[ct] = now
+        for ct, value in self._last_used_by_ct.items():
+            if ct > worker_ct and value is self._SCALE_DOWN_BLOCKED:
+                self._last_used_by_ct[ct] = now
+
+    def should_scale_down(self, worker_ct: int, demand_ct: int = 0) -> bool:
+        """Return whether current capacity should retire one worker now."""
+        if worker_ct not in self._last_used_by_ct:
+            logger.warning(
+                f'No record of needing {worker_ct} workers, allowing scale-down'
+                f' (worker count exceeded tracked usage, near={self._near_worker_ct_summary(worker_ct)})'
+            )
+            return True
+        last_used = self._last_used_by_ct[worker_ct]
+        if last_used is self._SCALE_DOWN_BLOCKED:
+            return False
+        if self.scaledown_reserve and worker_ct <= demand_ct + self.scaledown_reserve:
+            return False
+        delta = time.monotonic() - last_used  # type: ignore[operator]
+        return bool(delta > self.scaledown_wait)
+
+    def get_status_data(self, worker_ct: int) -> dict:
+        return {
+            "count": len(self._last_used_by_ct),
+            "top5": self._top5_summary(),
+            "near_worker_ct": self._near_worker_ct_summary(worker_ct),
+        }
+
+    def _format_entries(self, keys: list[int]) -> dict[int, str | float]:
+        """Return human-readable _last_used_by_ct values for the given keys."""
+        now = time.monotonic()
+        result: dict[int, str | float] = {}
+        for k in keys:
+            if k < 0:
+                continue
+            if k not in self._last_used_by_ct:
+                result[k] = "absent"
+            elif self._last_used_by_ct[k] is self._SCALE_DOWN_BLOCKED:
+                result[k] = "blocked"
+            else:
+                result[k] = round(now - self._last_used_by_ct[k], 2)  # type: ignore[operator]
+        return result
+
+    def _top5_summary(self) -> dict[int, str | float]:
+        """Return the 5 highest worker-count entries from _last_used_by_ct, with human-readable values."""
+        return self._format_entries(sorted(self._last_used_by_ct, reverse=True)[:5])
+
+    def _near_worker_ct_summary(self, worker_ct: int) -> dict[int, str | float]:
+        """Return _last_used_by_ct values for keys around the current worker count."""
+        keys = list(range(max(worker_ct - 2, 1), worker_ct + 3))
+        return self._format_entries(keys)
+
+
 class WorkerPool(WorkerPoolProtocol):
     def __init__(
         self,
@@ -238,6 +328,7 @@ class WorkerPool(WorkerPoolProtocol):
         max_workers: int | None = None,
         scaledown_wait: float = 15.0,
         scaledown_interval: float = 15.0,
+        scaledown_reserve: int = 0,
         worker_stop_wait: float = 30.0,
         worker_removal_wait: float = 30.0,
         worker_max_lifetime_seconds: float | None = 4 * 60 * 60,
@@ -269,16 +360,7 @@ class WorkerPool(WorkerPoolProtocol):
         # the timeout runner keeps its own task
         self.timeout_runner = NextWakeupRunner(self.workers, self.cancel_worker, shared=shared, name='worker_timeout_manager')
 
-        # Track the last time we used X number of workers, like
-        # {
-        #   0: None,
-        #   1: None,
-        #   2: <timestamp>
-        # }
-        # where 1 worker is currently in use, and a task using the 2nd worker
-        # finished at <timestamp>, which is compared against out scale down wait time
-        self.last_used_by_ct: dict[int, float | None] = {}
-        self.scaledown_wait = scaledown_wait
+        self.usage_tracker = WorkerUsageTracker(scaledown_wait=scaledown_wait, scaledown_reserve=scaledown_reserve)
         self.scaledown_interval = scaledown_interval  # seconds for poll to see if we should retire workers
         self.worker_stop_wait = worker_stop_wait  # seconds to wait for a worker to exit on its own before SIGTERM, SIGKILL
         self.worker_removal_wait = worker_removal_wait  # after worker process exits, seconds to keep its record, for stats
@@ -318,11 +400,16 @@ class WorkerPool(WorkerPoolProtocol):
         return self.processed_count + self.queuer.count() + self.blocker.count() + sum(1 for w in self.workers if w.current_task)
 
     def get_status_data(self) -> dict[str, Any]:
+        worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
         return {
             "next_worker_id": self.next_worker_id,
             "finished_count": self.finished_count,
             "canceled_count": self.canceled_count,
             "retirement_count": self.retirement_count,
+            "worker_ct": worker_ct,
+            "running_ct": self.get_running_count(),
+            "active_task_ct": self.active_task_ct(),
+            "usage": self.usage_tracker.get_status_data(worker_ct),
         }
 
     async def start_working(self, dispatcher: DispatcherMain) -> None:
@@ -341,16 +428,6 @@ class WorkerPool(WorkerPoolProtocol):
             if worker.current_task:
                 ct += 1
         return ct
-
-    def should_scale_down(self) -> bool:
-        "If True, we have not had enough work lately to justify the number of workers we are running"
-        worker_ct = len([worker for worker in self.workers if worker.counts_for_capacity])
-        last_used = self.last_used_by_ct.get(worker_ct)
-        if last_used:
-            delta = time.monotonic() - last_used
-            # Criteria - last time we used this-many workers was greater than the setting
-            return bool(delta > self.scaledown_wait)
-        return False
 
     async def scale_workers(self) -> int:
         """Initiates scale-up and scale-down actions
@@ -390,17 +467,40 @@ class WorkerPool(WorkerPoolProtocol):
             pass
 
         elif worker_ct > self.min_workers:
-            # Scale down above or to MIN, because surplus of workers have done nothing useful in <cutoff> time
-            async with self.workers.management_lock:
-                if self.should_scale_down():
-                    for worker in available_workers:
-                        if worker.current_task is None:
-                            logger.info(f'Scaling down worker id={worker.worker_id} (prior ct={worker_ct}) due to demand')
-                            await worker.signal_stop()
-                            changed_ct -= 1
-                            break
+            changed_ct = await self._scale_down(worker_ct)
 
         logger.debug(f'Ran scale_workers worker_ct={worker_ct}, active_task_ct={active_task_ct}, changed {changed_ct}')
+        return changed_ct
+
+    async def _scale_down(self, prior_worker_ct: int) -> int:
+        """Retire idle workers down to demand + reserve, respecting min_workers.
+
+        Returns a negative count of workers that were sent stop signals.
+        Must not be called if worker_ct <= min_workers.
+        """
+        max_scaledown_per_tick = 300
+        changed_ct = 0
+        async with self.workers.management_lock:
+            # fill_unknown_usage mutates usage_tracker — must be under lock (see also process_finished)
+            # Fill once; demand_ct does not change under the lock
+            demand_ct = self.active_task_ct()
+            capacity_ct = len([w for w in self.workers if w.counts_for_capacity])
+            self.usage_tracker.fill_unknown_usage(capacity_ct, demand_ct)
+            scaled = 0
+            while capacity_ct > self.min_workers and self.usage_tracker.should_scale_down(capacity_ct, demand_ct):
+                if scaled >= max_scaledown_per_tick:
+                    logger.warning(f'Reached scale-down limit of {max_scaledown_per_tick} in a single tick, deferring remaining to next tick')
+                    break
+                for worker in self.workers:
+                    if worker.counts_for_capacity and worker.current_task is None:
+                        logger.info(f'Scaling down worker id={worker.worker_id} (prior ct={prior_worker_ct}) due to demand')
+                        await worker.signal_stop()
+                        changed_ct -= 1
+                        capacity_ct -= 1
+                        scaled += 1
+                        break
+                else:
+                    break
         return changed_ct
 
     async def manage_new_workers(self) -> None:
@@ -609,8 +709,6 @@ class WorkerPool(WorkerPoolProtocol):
     async def post_task_start(self, message: dict) -> None:
         if 'timeout' in message:
             await self.timeout_runner.kick()  # kick timeout task to set wakeup
-        running_ct = self.get_running_count()
-        self.last_used_by_ct[running_ct] = None  # block scale down of this amount
 
     async def dispatch_task(self, message: dict) -> None:
         uuid = message.get("uuid", "<unknown>")
@@ -662,9 +760,6 @@ class WorkerPool(WorkerPoolProtocol):
                 msg += f", result: {result}"
         logger.debug(msg)
 
-        running_ct = self.get_running_count()
-        self.last_used_by_ct[running_ct] = time.monotonic()  # scale down may be allowed, clock starting now
-
         is_stopping = message.get('is_stopping', False)
 
         # Mark the worker as no longer busy
@@ -673,12 +768,19 @@ class WorkerPool(WorkerPoolProtocol):
                 self.canceled_count += 1
             else:
                 self.finished_count += 1
+            # Capture demand before clearing current_task; this is the level
+            # being released by this completion event.
+            pre_finish_demand_ct = self.active_task_ct()
             if is_stopping:
                 worker.status = 'stopping'
                 if not worker.stopping_at:
                     worker.stopping_at = time.monotonic()
             worker.mark_finished_task()
             self.workers.move_to_end(worker.worker_id)
+            # Record the just-released demand level. This hot-path timestamp
+            # avoids waiting for the next periodic fill tick to start scale-down aging.
+            # Must be under management_lock — see also scale_workers and should_scale_down.
+            self.usage_tracker.record_task_finish(pre_finish_demand_ct)
 
         if not self.queuer.queued_messages and all(worker.current_task is None for worker in self.workers):
             self.events.work_cleared.set()

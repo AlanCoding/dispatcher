@@ -2,11 +2,11 @@ import asyncio
 import logging
 import multiprocessing
 import time
-from typing import Callable
 from unittest import mock
 
 import pytest
 
+from asyncio_tests.unit.service.conftest import fill_and_check_scale_down
 from dispatcherd.service.asyncio_tasks import SharedAsyncObjects
 from dispatcherd.service.main import DispatcherMain
 from dispatcherd.service.pool import WorkerPool
@@ -33,18 +33,6 @@ class _InstrumentedQueueWrapper:
 
     async def wait_for_reader(self) -> None:
         await self._reader_waiting.wait()
-
-
-@pytest.fixture
-def pool_factory(test_settings) -> Callable[..., WorkerPool]:
-    def _factory(**kwargs_overrides) -> WorkerPool:
-        pm = ProcessManager(settings=test_settings)
-        kwargs = dict(process_manager=pm, min_workers=5, max_workers=5, shared=SharedAsyncObjects())
-        kwargs.update(kwargs_overrides)
-        pool = WorkerPool(**kwargs)
-        return pool
-
-    return _factory
 
 
 @pytest.fixture
@@ -167,9 +155,9 @@ async def test_initialized_and_ready_but_scale(pool_factory):
 
 
 @pytest.mark.asyncio
-async def test_scale_down_condition(pool_factory):
+async def test_scale_down_condition(fake_pool_factory):
     """You have 3 workers due to past demand, but work finished long ago. Should scale down."""
-    pool = pool_factory(min_workers=1, max_workers=3)
+    pool = fake_pool_factory(min_workers=1, max_workers=3)
 
     # Prepare for test by scaling up to the 3 max workers by adding demand
     pool.queuer.queued_messages = [{'task': 'waiting.task'} for i in range(3)]  # 3 tasks, 3 workers
@@ -177,20 +165,26 @@ async def test_scale_down_condition(pool_factory):
         await pool.scale_workers()
     assert len(pool.workers) == 3
     for worker in pool.workers:
-        worker.status = 'ready'  # a lie, for test
         worker.current_task = None
     assert set([worker.status for worker in pool.workers]) == {'ready'}
 
-    # Clear queue and set finished times to long ago
-    pool.queuer.queued_messages = []  # queue has been fully worked through, no workers are busy
-    pool.last_used_by_ct = {i: time.monotonic() - 120.0 for i in range(30)}  # all work finished 120 seconds ago
+    # Clear queue — no workers are busy
+    pool.queuer.queued_messages = []
 
-    # Outcome of this situation is expected to be a scale-down event
-    assert pool.should_scale_down() is True
-    await pool.scale_workers()
-    # Same number of workers but one worker has been sent a stop signal
+    base = 1000.0
+    # First tick fills tracker with idle timestamps
+    with mock.patch('time.monotonic', return_value=base):
+        assert fill_and_check_scale_down(pool) is False
+
+    # After scaledown_wait, scale-down proceeds
+    with mock.patch('time.monotonic', return_value=base + 100.0):
+        assert fill_and_check_scale_down(pool) is True
+        await pool.scale_workers()
+    # Same number of workers but all surplus workers have been sent a stop signal
     assert len(pool.workers) == 3
-    assert set([worker.status for worker in pool.workers]) == {'ready', 'stopping'}
+    statuses = [worker.status for worker in pool.workers]
+    assert statuses.count('stopping') == 2
+    assert statuses.count('ready') == 1
 
 
 @pytest.mark.asyncio
@@ -208,9 +202,10 @@ async def test_scale_up_worker_should_not_be_immediately_eligible_for_scaledown(
         worker.status = 'ready'
         worker.current_task = None
 
+    # Pre-fill tracker with old idle timestamps so scale-down would normally be allowed
     idle_timestamp = time.monotonic() - 120.0
-    for i in range(existing_workers + 1):
-        pool.last_used_by_ct[i] = idle_timestamp  # stale timestamp for a previous high-water mark
+    with mock.patch('time.monotonic', return_value=idle_timestamp):
+        pool.usage_tracker.fill_unknown_usage(worker_ct=existing_workers, demand_ct=0)
 
     # Queue pressure requires more workers, so scaling up should add one.
     pool.queuer.queued_messages = [{'task': 'waiting.task'} for _ in range(existing_workers + 1)]
@@ -241,16 +236,13 @@ async def test_scale_up_worker_should_not_be_immediately_eligible_for_scaledown(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(pool_factory):
+async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(fake_pool_factory):
     """Dispatched work should start while holding the worker lock and block scale-down heuristics."""
-    pool = pool_factory(min_workers=1, max_workers=1)
+    pool = fake_pool_factory(min_workers=1, max_workers=1)
     worker_id = await pool.up()
     worker = pool.workers.get_by_id(worker_id)
-    worker.status = 'ready'
+    assert worker.status == 'ready'
     worker.current_task = None
-
-    # Pretend the worker idled long enough that, without new work, scale-down is allowed.
-    pool.last_used_by_ct[1] = time.monotonic() - 120.0
 
     lock_states: list[bool] = []
 
@@ -263,16 +255,16 @@ async def test_dispatch_task_holds_management_lock_and_blocks_scaledown(pool_fac
     message = {'uuid': 'task-123', 'task': 'demo'}
     await pool.dispatch_task(message)
 
-    # Starting the task should have happened while the lock was held and should block scale-down timers.
+    # Starting the task should have happened while the lock was held.
     assert lock_states == [True]
-    assert pool.last_used_by_ct[1] is None
-    assert pool.should_scale_down() is False
+    # Worker is busy (current_task set), so fill_unknown_usage marks key 1 as blocked.
+    assert fill_and_check_scale_down(pool) is False
 
 
 @pytest.mark.asyncio
-async def test_manage_workers_skips_scaledown_when_recently_scaled_up(pool_factory):
+async def test_manage_workers_skips_scaledown_when_recently_scaled_up(fake_pool_factory):
     """When scaling up we should avoid the scale-down pass until the new capacity is used."""
-    pool = pool_factory()
+    pool = fake_pool_factory()
     pool.scaledown_interval = 0.0
 
     async def fake_scale_workers():
@@ -320,8 +312,8 @@ async def test_shutdown_is_idepotent(pool_factory):
 
 
 @pytest.mark.asyncio
-async def test_auto_count_max_workers(pool_factory):
+async def test_auto_count_max_workers(fake_pool_factory):
     "Test max_workers is set to the number of CPUs if not set"
     cpu_count = multiprocessing.cpu_count()
-    pool = pool_factory(max_workers=None)
+    pool = fake_pool_factory(max_workers=None)
     assert pool.max_workers == cpu_count
