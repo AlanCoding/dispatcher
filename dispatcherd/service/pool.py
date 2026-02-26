@@ -230,12 +230,12 @@ class WorkerData(WorkerDataProtocol):
 
 
 class WorkerUsageTracker:
-    """Tracks when the pool last needed N concurrent workers, for scale-down decisions.
+    """Scale-down memory keyed by worker count.
 
-    Three states per worker-count key:
-    - absent:  never needed this many → scale down immediately
-    - _SCALE_DOWN_BLOCKED:  actively in use → block scale-down
-    - float timestamp:  last finished at this count → scale down if idle > scaledown_wait
+    Each key is one of:
+    - absent: never observed as needed
+    - _SCALE_DOWN_BLOCKED: currently at or below demand
+    - float timestamp: last time that level was released
     """
 
     _SCALE_DOWN_BLOCKED = object()
@@ -245,42 +245,25 @@ class WorkerUsageTracker:
         self.scaledown_wait = scaledown_wait
         self.scaledown_reserve = scaledown_reserve
 
-    def record_task_finish(self, running_ct: int) -> None:
-        """Record a timestamp when a task finishes at the given running count.
+    def record_task_finish(self, demand_ct: int) -> None:
+        """Mark a just-released demand level with a timestamp.
 
-        Called from the task-completion hot path.  This is the only per-task
-        hook — there is no corresponding record_task_start because blocking
-        is handled entirely by the periodic fill_unknown_usage.  Recording
-        the finish timestamp allows scale-down to proceed at the earliest
-        possible moment rather than waiting for the next periodic tick.
+        This hot-path write avoids waiting for the next periodic fill cycle.
         """
-        self._last_used_by_ct[running_ct] = time.monotonic()
+        self._last_used_by_ct[demand_ct] = time.monotonic()
 
-    def fill_unknown_usage(self, worker_ct: int, running_ct: int) -> None:
-        """Update the tracker with the current observed state of the pool.
+    def fill_unknown_usage(self, worker_ct: int, demand_ct: int) -> None:
+        """Apply current pool state to the tracker.
 
-        Called on every periodic scale-down check.  This is the primary input
-        mechanism for blocking scale-down — keys at or below the current load
-        are marked as blocked.  record_task_finish provides the complementary
-        timestamp recording on the hot path for timely scale-down.
-
-        For each worker-count key up to worker_ct:
-        - Keys at or below running_ct are set to blocked (actively in use),
-          regardless of previous state.
-        - Keys above running_ct that are absent or previously blocked are
-          set to the current timestamp (idle surplus, scale-down allowed
-          after scaledown_wait).
-        - Keys above running_ct that already have a timestamp are left
-          alone so they continue aging toward scaledown_wait.
-
-        Keys above worker_ct that are stale blocked entries (left over from
-        a previously higher worker count) are downgraded to the current
-        timestamp so they age out naturally instead of showing as blocked
-        in status output forever.
+        Principles:
+        - Counts `<= demand_ct` are blocked.
+        - Idle surplus counts (`demand_ct < ct <= worker_ct`) get timestamps
+          only when first seen or when transitioning from blocked.
+        - Existing idle timestamps keep aging.
         """
         now = time.monotonic()
         for ct in range(1, worker_ct + 1):
-            if ct <= running_ct:
+            if ct <= demand_ct:
                 self._last_used_by_ct[ct] = self._SCALE_DOWN_BLOCKED
             elif ct not in self._last_used_by_ct or self._last_used_by_ct[ct] is self._SCALE_DOWN_BLOCKED:
                 self._last_used_by_ct[ct] = now
@@ -288,7 +271,8 @@ class WorkerUsageTracker:
             if ct > worker_ct and value is self._SCALE_DOWN_BLOCKED:
                 self._last_used_by_ct[ct] = now
 
-    def should_scale_down(self, worker_ct: int, running_ct: int = 0) -> bool:
+    def should_scale_down(self, worker_ct: int, demand_ct: int = 0) -> bool:
+        """Return whether current capacity should retire one worker now."""
         if worker_ct not in self._last_used_by_ct:
             logger.warning(
                 f'No record of needing {worker_ct} workers, allowing scale-down'
@@ -298,7 +282,7 @@ class WorkerUsageTracker:
         last_used = self._last_used_by_ct[worker_ct]
         if last_used is self._SCALE_DOWN_BLOCKED:
             return False
-        if self.scaledown_reserve and worker_ct <= running_ct + self.scaledown_reserve:
+        if self.scaledown_reserve and worker_ct <= demand_ct + self.scaledown_reserve:
             return False
         delta = time.monotonic() - last_used  # type: ignore[operator]
         return bool(delta > self.scaledown_wait)
@@ -784,16 +768,19 @@ class WorkerPool(WorkerPoolProtocol):
                 self.canceled_count += 1
             else:
                 self.finished_count += 1
+            # Capture demand before clearing current_task; this is the level
+            # being released by this completion event.
+            pre_finish_demand_ct = self.active_task_ct()
             if is_stopping:
                 worker.status = 'stopping'
                 if not worker.stopping_at:
                     worker.stopping_at = time.monotonic()
             worker.mark_finished_task()
             self.workers.move_to_end(worker.worker_id)
-            # Record usage after mark_finished_task clears current_task,
-            # so active_task_ct reflects the post-finish state.
+            # Record the just-released demand level. This hot-path timestamp
+            # avoids waiting for the next periodic fill tick to start scale-down aging.
             # Must be under management_lock — see also scale_workers and should_scale_down.
-            self.usage_tracker.record_task_finish(self.active_task_ct())
+            self.usage_tracker.record_task_finish(pre_finish_demand_ct)
 
         if not self.queuer.queued_messages and all(worker.current_task is None for worker in self.workers):
             self.events.work_cleared.set()

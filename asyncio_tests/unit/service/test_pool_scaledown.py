@@ -56,7 +56,7 @@ async def test_task_finish_enables_timely_scale_down(fake_pool_factory):
         assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     base = 1000.0
-    # Simulate a task finishing — sets timestamp at running_ct
+    # Simulate a task finishing — sets timestamp at the current capacity key
     with patch('time.monotonic', return_value=base):
         pool.usage_tracker.record_task_finish(3)
 
@@ -146,7 +146,7 @@ async def test_blocked_entries_clear_when_load_drops(fake_pool_factory):
     for w in workers:
         w.current_task = None
 
-    # Next tick: running_ct=0, previously blocked keys become timestamps
+    # Next tick: demand_ct=0, previously blocked keys become timestamps
     with patch('time.monotonic', return_value=base + 1.0):
         assert fill_and_check_scale_down(pool) is False  # timestamps too recent
 
@@ -172,7 +172,7 @@ async def test_status_data_includes_usage_diagnostics(fake_pool_factory):
     await workers[1].start_task({'task': 'busy-2'})
 
     base = 1000.0
-    # Fill: running_ct=2, so keys 1-2 blocked, keys 3-4 idle
+    # Fill: demand_ct=2, so keys 1-2 blocked, keys 3-4 idle
     with patch('time.monotonic', return_value=base):
         fill_and_check_scale_down(pool)
 
@@ -205,7 +205,7 @@ async def test_status_data_near_worker_ct_shows_absent_keys(fake_pool_factory):
         assert pool.workers.get_by_id(worker_id).status == 'ready'
 
     # Fill only keys 1-2 (via fill with worker_ct=2)
-    pool.usage_tracker.fill_unknown_usage(worker_ct=2, running_ct=0)
+    pool.usage_tracker.fill_unknown_usage(worker_ct=2, demand_ct=0)
 
     data = pool.get_status_data()
     near = data["usage"]["near_worker_ct"]

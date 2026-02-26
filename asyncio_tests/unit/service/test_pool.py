@@ -205,7 +205,7 @@ async def test_scale_up_worker_should_not_be_immediately_eligible_for_scaledown(
     # Pre-fill tracker with old idle timestamps so scale-down would normally be allowed
     idle_timestamp = time.monotonic() - 120.0
     with mock.patch('time.monotonic', return_value=idle_timestamp):
-        pool.usage_tracker.fill_unknown_usage(worker_ct=existing_workers, running_ct=0)
+        pool.usage_tracker.fill_unknown_usage(worker_ct=existing_workers, demand_ct=0)
 
     # Queue pressure requires more workers, so scaling up should add one.
     pool.queuer.queued_messages = [{'task': 'waiting.task'} for _ in range(existing_workers + 1)]
