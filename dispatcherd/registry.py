@@ -134,10 +134,11 @@ class DispatcherMethod:
         """
 
         resolved_queue: Optional[str]
-        if queue and callable(queue):
-            resolved_queue = queue()
+        effective_queue = queue if queue is not None else self.queue
+        if effective_queue and callable(effective_queue):
+            resolved_queue = effective_queue()
         else:
-            resolved_queue = queue  # Can still be None if we rely on the broker default channel
+            resolved_queue = effective_queue  # Can still be None if we rely on the broker default channel
 
         obj = self.get_async_body(args=args, kwargs=kwargs, uuid=uuid, bind=bind, timeout=timeout, processor_options=processor_options)
 
