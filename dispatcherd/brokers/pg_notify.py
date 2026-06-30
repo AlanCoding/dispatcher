@@ -189,7 +189,9 @@ class Broker(BrokerProtocol):
             else:
                 raise RuntimeError('Could not construct async connection for lack of config or factory')
             self._async_connection = connection
-            logger.info('pg_notify async connection established in %.3f seconds', time.perf_counter() - start)
+            elapsed = time.perf_counter() - start
+            log_level = logging.DEBUG if elapsed < 0.01 else logging.WARNING
+            logger.log(log_level, 'pg_notify async connection established in %.3f seconds', elapsed)
         assert self._async_connection is not None
         return self._async_connection
 
@@ -337,7 +339,9 @@ class Broker(BrokerProtocol):
             else:
                 raise RuntimeError('Could not construct connection for lack of config or factory')
             self._sync_connection = connection
-            logger.info('pg_notify sync connection established in %.3f seconds', time.perf_counter() - start)
+            elapsed = time.perf_counter() - start
+            log_level = logging.DEBUG if elapsed < 0.01 else logging.WARNING
+            logger.log(log_level, 'pg_notify sync connection established in %.3f seconds', elapsed)
         assert self._sync_connection is not None
         return self._sync_connection
 
